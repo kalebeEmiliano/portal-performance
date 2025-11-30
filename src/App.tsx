@@ -406,16 +406,34 @@ const App = () => {
 
   // --- RENDER ---
 
+  // NOTE: Added global style to prevent black background issues on body
+  const GlobalStyle = () => (
+    <style>{`
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #f8fafc; /* slate-50 */
+      }
+      #root {
+        width: 100%;
+        height: 100%;
+      }
+    `}</style>
+  );
+
   if (!appMode) {
       return (
         <div className="min-h-screen w-full bg-slate-50 flex items-center justify-center p-4">
-            <div className="max-w-4xl w-full">
+            <GlobalStyle />
+            <div className="w-full">
                 <div className="text-center mb-12">
                     <h1 className="text-4xl font-bold text-slate-800 mb-4">Portal de Análise Operacional</h1>
                     <p className="text-slate-500">Selecione o indicador que deseja analisar hoje</p>
                 </div>
                 
-                <div className="grid md:grid-cols-2 gap-8">
+                <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
                     <button 
                         onClick={() => setAppMode('performance')}
                         className="bg-white p-8 rounded-2xl shadow-sm border-2 border-transparent hover:border-blue-500 hover:shadow-xl transition-all text-left group"
@@ -452,10 +470,11 @@ const App = () => {
   // 2. MAIN APP CONTAINER
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8">
-      <div className="w-full mx-auto">
+      <GlobalStyle />
+      <div className="w-full">
         
         {/* Header */}
-        <header className="mb-8 border-b border-slate-200 pb-4 flex justify-between items-center">
+        <header className="mb-8 border-b border-slate-200 pb-4 flex justify-between items-center w-full">
           <div>
             <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
                 {appMode === 'performance' ? <BarChart2 className="text-blue-600" /> : <Timer className="text-purple-600" />}
@@ -474,7 +493,7 @@ const App = () => {
 
         {/* --- UPLOAD SECTION --- */}
         {!fileData && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center max-w-4xl mx-auto">
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center w-full">
             <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 ${appMode === 'performance' ? 'bg-blue-50 text-blue-500' : 'bg-purple-50 text-purple-500'}`}>
               <Upload className="w-10 h-10" />
             </div>
@@ -498,10 +517,10 @@ const App = () => {
 
         {/* --- PERFORMANCE ANALYZER DASHBOARD --- */}
         {fileData && appMode === 'performance' && (
-            <div className="space-y-6">
+            <div className="space-y-6 w-full">
                 {!perfResults ? (
                     /* Config Screen Performance */
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 max-w-4xl mx-auto">
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 w-full">
                         <div className="flex items-center justify-between mb-8">
                             <h2 className="text-xl font-bold flex items-center gap-2"><CheckCircle className="text-green-500"/> Arquivo Carregado</h2>
                             <div className="flex gap-4">
@@ -571,12 +590,12 @@ const App = () => {
 
                         {perfViewMode === 'performance' && (
                             <>
-                                <div className="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200">
+                                <div className="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200 w-full">
                                     <div className="flex gap-2"><span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-xs font-bold uppercase">{granularity}</span></div>
                                     <button onClick={softReset} className="flex items-center gap-2 text-slate-600 hover:text-slate-900 text-sm"><RefreshCcw size={14}/> Resetar</button>
                                 </div>
                                 {perfLeaders.length > 0 && (
-                                    <div className="bg-slate-800 text-white rounded-xl p-6 shadow-lg">
+                                    <div className="bg-slate-800 text-white rounded-xl p-6 shadow-lg w-full">
                                         <h3 className="text-sm font-bold uppercase text-slate-400 mb-4 flex items-center gap-2"><ShieldAlert size={16}/> Top Team Leaders Impactados</h3>
                                         <div className="grid md:grid-cols-3 gap-4">
                                             {perfLeaders.map((l, i) => (
@@ -588,7 +607,7 @@ const App = () => {
                                         </div>
                                     </div>
                                 )}
-                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
                                     <table className="w-full text-left text-sm">
                                         <thead className="bg-slate-100 text-slate-600">
                                             <tr><th className="px-6 py-3">Colaborador</th><th className="px-6 py-3">Leader</th><th className="px-6 py-3 text-center">Maior Seq.</th><th className="px-6 py-3 text-center">Falhas</th></tr>
@@ -608,7 +627,7 @@ const App = () => {
                             </>
                         )}
                         {perfViewMode === 'indirects' && (
-                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
                                 <table className="w-full text-left text-sm">
                                     <thead className="bg-orange-50 text-orange-800"><tr><th className="px-6 py-3">Nome</th><th className="px-6 py-3">Leader</th><th className="px-6 py-3">Tempo</th><th className="px-6 py-3">Unidades</th></tr></thead>
                                     <tbody className="divide-y divide-slate-100">
@@ -626,10 +645,10 @@ const App = () => {
 
         {/* --- SETUP TIME ANALYZER DASHBOARD --- */}
         {fileData && appMode === 'setup' && setupResults && (
-            <div className="space-y-6">
+            <div className="space-y-6 w-full">
                 
                 {/* Control Header */}
-                <div className="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
+                <div className="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200 shadow-sm w-full">
                     <div className="flex items-center gap-2">
                         <span className="font-bold text-slate-700">Arquivo:</span>
                         <span className="text-slate-500 text-sm">{fileName}</span>
@@ -639,7 +658,7 @@ const App = () => {
 
                 {/* Leader Stats (Shared) */}
                 {setupResults.leaders.length > 0 && (
-                    <div className="bg-purple-900 text-white rounded-xl p-6 shadow-lg">
+                    <div className="bg-purple-900 text-white rounded-xl p-6 shadow-lg w-full">
                          <h3 className="text-sm font-bold uppercase text-purple-200 mb-4 flex items-center gap-2">
                             <Users size={16}/> Top Leaders com Problemas de Pontualidade
                         </h3>
@@ -660,7 +679,7 @@ const App = () => {
                 )}
 
                 {/* Tabs */}
-                <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2">
+                <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 w-full">
                     <button 
                         onClick={() => setSetupViewMode('fast_start')}
                         className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'fast_start' ? 'border-red-500 text-red-600 bg-red-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
@@ -679,7 +698,7 @@ const App = () => {
 
                 {/* View: Fast Start */}
                 {setupViewMode === 'fast_start' && (
-                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden">
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-red-50 text-red-800 text-sm border-b border-red-100 flex items-center gap-2">
                             <AlertTriangle size={16}/>
                             Exibindo colaboradores com <strong>Tempo de Bip Entrada {'>'} 15:00</strong>
@@ -714,7 +733,7 @@ const App = () => {
 
                 {/* View: Strong Finish */}
                 {setupViewMode === 'strong_finish' && (
-                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden">
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-blue-50 text-blue-800 text-sm border-b border-blue-100 flex items-center gap-2">
                             <AlertTriangle size={16}/>
                             Exibindo colaboradores que pararam <strong>antes da meta</strong> ou <strong>demoraram a sair</strong>.

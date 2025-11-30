@@ -1,39 +1,90 @@
-import React, { useState } from 'react';
+import React, { useState, ChangeEvent } from 'react';
 import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Clock, Users, RefreshCcw, Eye, ShieldAlert, UserCheck, Timer, ArrowRight, Settings } from 'lucide-react';
 
-// DICA PARA STACKBLITZ:
-// Se o visual estiver "quebrado" (sem estilo), certifique-se de adicionar
-// <script src="https://cdn.tailwindcss.com"></script>
-// no seu arquivo 'index.html' dentro da tag <head>.
+// --- INTERFACES (TIPAGENS PARA TYPESCRIPT) ---
+
+interface PerformanceRow {
+  id: number;
+  nome: string;
+  teamLeader: string;
+  periodo: string;
+  meta: number;
+  prodLiq: number;
+  tempoProcRaw: string;
+  tempoProcSec: number;
+  unidades: number;
+  isIndirect: boolean;
+  isOffender: boolean;
+  // Campos calculados na análise
+  maxStreak?: number;
+  totalOffenses?: number;
+  totalRows?: number;
+  offenseRate?: number;
+  history?: PerformanceRow[];
+}
+
+interface SetupRow {
+  id: number;
+  nome: string;
+  teamLeader: string;
+  // Fast Start
+  clockIn: string;
+  primeiroBip: string;
+  tempoBipEntrada: string;
+  tempoBipEntradaSec: number;
+  isFastStartOffender: boolean;
+  // Strong Finish
+  ultimoBipRaw: string;
+  targetSaidaRaw: string;
+  clockOutRaw: string;
+  isStrongFinishOffender: boolean;
+  sfReason: string;
+}
+
+interface LeaderStat {
+  name: string;
+  count: number; // Para Setup
+  totalImpact?: number; // Para Performance
+}
+
+interface SetupResults {
+  fastStart: SetupRow[];
+  strongFinish: SetupRow[];
+  leaders: LeaderStat[];
+}
+
+// --- APP ---
 
 const App = () => {
   // Global State
-  const [appMode, setAppMode] = useState(null); // 'performance' or 'setup'
+  const [appMode, setAppMode] = useState<'performance' | 'setup' | null>(null);
   
   // Common State
-  const [fileData, setFileData] = useState(null);
-  const [fileName, setFileName] = useState('');
-  const [processing, setProcessing] = useState(false);
-  const [debugMode, setDebugMode] = useState(false);
+  // Usamos 'any[]' aqui para simplificar o estado inicial que pode receber ambos os tipos,
+  // mas fazemos o cast correto nas funções de análise.
+  const [fileData, setFileData] = useState<any[] | null>(null);
+  const [fileName, setFileName] = useState<string>('');
+  const [processing, setProcessing] = useState<boolean>(false);
+  const [debugMode, setDebugMode] = useState<boolean>(false);
   
   // Performance Mode State
-  const [granularity, setGranularity] = useState(null);
-  const [perfViewMode, setPerfViewMode] = useState('performance');
-  const [perfResults, setPerfResults] = useState(null);
-  const [perfLeaders, setPerfLeaders] = useState([]);
-  const [perfIndirects, setPerfIndirects] = useState([]);
+  const [granularity, setGranularity] = useState<'hourly' | 'daily' | null>(null);
+  const [perfViewMode, setPerfViewMode] = useState<'performance' | 'indirects'>('performance');
+  const [perfResults, setPerfResults] = useState<PerformanceRow[] | null>(null);
+  const [perfLeaders, setPerfLeaders] = useState<LeaderStat[]>([]);
+  const [perfIndirects, setPerfIndirects] = useState<PerformanceRow[]>([]);
 
   // Setup Mode State
-  const [setupViewMode, setSetupViewMode] = useState('fast_start'); // 'fast_start' or 'strong_finish'
-  const [setupResults, setSetupResults] = useState(null);
+  const [setupViewMode, setSetupViewMode] = useState<'fast_start' | 'strong_finish'>('fast_start');
+  const [setupResults, setSetupResults] = useState<SetupResults | null>(null);
 
   // --- HELPERS ---
 
-  const timeToSeconds = (timeStr) => {
+  const timeToSeconds = (timeStr: string): number => {
     if (!timeStr) return 0;
     try {
       const parts = timeStr.split(':');
-      if (parts.length < 2) return 0; // Handle partial times
+      if (parts.length < 2) return 0; 
       const h = +parts[0] || 0;
       const m = +parts[1] || 0;
       const s = parts.length === 3 ? +parts[2] : 0;
@@ -43,34 +94,30 @@ const App = () => {
     }
   };
 
-  const parseBrazilianNumber = (numStr) => {
+  const parseBrazilianNumber = (numStr: string): number => {
     if (!numStr) return 0;
     if (typeof numStr === 'number') return numStr;
     const cleanStr = numStr.replace(/\./g, '').replace(',', '.').replace('%', '');
     return parseFloat(cleanStr) || 0;
   };
 
-  const parseDate = (dateStr) => {
+  const parseDate = (dateStr: string): Date | null => {
     if (!dateStr) return null;
-    // Tenta formato ISO direto (2025-11-22 22:18:51)
     let d = new Date(dateStr.replace(/"/g, ''));
     if (!isNaN(d.getTime())) return d;
-    
-    // Tenta formato brasileiro escrito se necessário (ex: "22 de nov. de 2025")
-    // Mas para comparação de horas o ISO do exemplo é o principal.
     return null;
   };
 
-  const getDifferenceInMinutes = (dateA, dateB) => {
+  const getDifferenceInMinutes = (dateA: Date, dateB: Date): number => {
     if (!dateA || !dateB) return 0;
-    const diffMs = dateA - dateB; // Milliseconds
+    const diffMs = dateA.getTime() - dateB.getTime(); 
     return Math.floor(diffMs / 60000);
   };
 
   // --- HANDLERS ---
 
-  const handleFileUpload = (event) => {
-    const file = event.target.files[0];
+  const handleFileUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
     if (!file) return;
 
     setFileName(file.name);
@@ -78,18 +125,20 @@ const App = () => {
 
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text = e.target.result;
-      if (appMode === 'performance') {
-        processPerformanceCSV(text);
-      } else {
-        processSetupCSV(text);
+      const text = e.target?.result;
+      if (typeof text === 'string') {
+        if (appMode === 'performance') {
+          processPerformanceCSV(text);
+        } else {
+          processSetupCSV(text);
+        }
       }
     };
     reader.readAsText(file);
   };
 
   // --- PARSER: PERFORMANCE ---
-  const processPerformanceCSV = (text) => {
+  const processPerformanceCSV = (text: string) => {
     try {
       const lines = text.split('\n').filter(line => line.trim() !== '');
       const IDX_PERIODO = 0;
@@ -101,10 +150,10 @@ const App = () => {
       const IDX_UNIDADES = 18; 
       const MIN_COLS = 12; 
 
-      const parsedData = lines.slice(1).map((line, index) => {
+      const parsedData: PerformanceRow[] = lines.slice(1).map((line, index) => {
         const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
         if (cols.length < MIN_COLS) return null;
-        const cleanCol = (val) => val ? val.trim().replace(/^"|"$/g, '') : '';
+        const cleanCol = (val: string) => val ? val.trim().replace(/^"|"$/g, '') : '';
 
         const nome = cleanCol(cols[IDX_NOME]);
         const teamLeader = cleanCol(cols[IDX_TEAM_LEADER]);
@@ -125,8 +174,20 @@ const App = () => {
         const isIndirect = (tempoProcSec >= 3600) && (unidades === 0);
         const isOffender = (tempoProcSec >= 3600) && (prodLiq < meta) && !isIndirect;
 
-        return { id: index, nome, teamLeader, periodo, meta, prodLiq, tempoProcRaw, tempoProcSec, unidades, isIndirect, isOffender };
-      }).filter(item => item !== null);
+        return { 
+          id: index, 
+          nome, 
+          teamLeader, 
+          periodo, 
+          meta, 
+          prodLiq, 
+          tempoProcRaw, 
+          tempoProcSec, 
+          unidades, 
+          isIndirect, 
+          isOffender 
+        };
+      }).filter((item): item is PerformanceRow => item !== null);
 
       if (parsedData.length === 0) {
         alert("Nenhum dado válido. Verifique o layout de Performance.");
@@ -142,15 +203,10 @@ const App = () => {
     }
   };
 
-  // --- PARSER: SETUP TIME (NEW) ---
-  const processSetupCSV = (text) => {
+  // --- PARSER: SETUP TIME ---
+  const processSetupCSV = (text: string) => {
     try {
       const lines = text.split('\n').filter(line => line.trim() !== '');
-      // Layout Setup Time:
-      // 0: Periodo, 1: ID, 2: NOME, 3: TEAM LEADER, 4: TURNO, ...
-      // 6: CLOCK IN, 8: PRIMEIRO BIP, 11: TEMPO DE BIP ENTRADA
-      // 17: ÚLTIMO BIP, 19: TARGET SAIDA, 20: CLOCK OUT
-      
       const IDX_NOME = 2;
       const IDX_LEADER = 3;
       const IDX_CLOCK_IN = 6;
@@ -160,30 +216,25 @@ const App = () => {
       const IDX_TARGET_SAIDA = 19;
       const IDX_CLOCK_OUT = 20;
 
-      const parsedData = lines.slice(1).map((line, index) => {
+      const parsedData: SetupRow[] = lines.slice(1).map((line, index) => {
         const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
-        if (cols.length < 12) return null; // Min cols for Fast Start at least
-        const cleanCol = (val) => val ? val.trim().replace(/^"|"$/g, '') : '';
+        if (cols.length < 12) return null; 
+        const cleanCol = (val: string) => val ? val.trim().replace(/^"|"$/g, '') : '';
 
         const nome = cleanCol(cols[IDX_NOME]);
         const teamLeader = cleanCol(cols[IDX_LEADER]);
         
-        // Fast Start Data
         const clockIn = cleanCol(cols[IDX_CLOCK_IN]);
         const primeiroBip = cleanCol(cols[IDX_PRIMEIRO_BIP]);
         const tempoBipEntrada = cleanCol(cols[IDX_TEMPO_BIP_ENTRADA]);
         const tempoBipEntradaSec = timeToSeconds(tempoBipEntrada);
 
-        // Strong Finish Data
         const ultimoBipRaw = cleanCol(cols[IDX_ULTIMO_BIP]);
         const targetSaidaRaw = cleanCol(cols[IDX_TARGET_SAIDA]);
         const clockOutRaw = cleanCol(cols[IDX_CLOCK_OUT]);
 
-        // Logic Check
-        // 1. Fast Start: > 15 mins (900 seconds)
         const isFastStartOffender = tempoBipEntradaSec > 900;
 
-        // 2. Strong Finish:
         let isStrongFinishOffender = false;
         let sfReason = '';
 
@@ -192,12 +243,10 @@ const App = () => {
         const dateClockOut = parseDate(clockOutRaw);
 
         if (dateUltimo && dateTarget) {
-            // Regra 1: Saiu antes do Target (Early Quit)
             if (dateUltimo < dateTarget) {
                 isStrongFinishOffender = true;
                 sfReason = 'Parou antes da meta';
             }
-            // Regra 2: Demorou mais de 5 min para sair (Late Exit)
             else if (dateClockOut) {
                 const diffMins = getDifferenceInMinutes(dateClockOut, dateUltimo);
                 if (diffMins > 5) {
@@ -211,20 +260,18 @@ const App = () => {
             id: index,
             nome,
             teamLeader,
-            // Fast Start Props
             clockIn,
             primeiroBip,
             tempoBipEntrada,
             tempoBipEntradaSec,
             isFastStartOffender,
-            // Strong Finish Props
             ultimoBipRaw,
             targetSaidaRaw,
             clockOutRaw,
             isStrongFinishOffender,
             sfReason
         };
-      }).filter(item => item !== null);
+      }).filter((item): item is SetupRow => item !== null);
 
       if (parsedData.length === 0) {
         alert("Nenhum dado válido. Verifique o layout de Setup Time.");
@@ -234,24 +281,22 @@ const App = () => {
 
       setFileData(parsedData);
       
-      // Auto run analysis for Setup
       const fsOffenders = parsedData.filter(d => d.isFastStartOffender);
       const sfOffenders = parsedData.filter(d => d.isStrongFinishOffender);
       
-      // Group Leaders Impact (Combined)
-      const leaders = {};
+      const leaders: Record<string, number> = {};
       [...fsOffenders, ...sfOffenders].forEach(row => {
           if(!row.teamLeader) return;
           if(!leaders[row.teamLeader]) leaders[row.teamLeader] = 0;
           leaders[row.teamLeader]++;
       });
-      const leaderRanking = Object.entries(leaders)
+      const leaderRanking: LeaderStat[] = Object.entries(leaders)
         .sort(([,a], [,b]) => b - a)
         .slice(0, 3)
         .map(([name, count]) => ({ name, count }));
 
       setSetupResults({
-          fastStart: fsOffenders.sort((a,b) => b.tempoBipEntradaSec - a.tempoBipEntradaSec), // Piores primeiro
+          fastStart: fsOffenders.sort((a,b) => b.tempoBipEntradaSec - a.tempoBipEntradaSec), 
           strongFinish: sfOffenders,
           leaders: leaderRanking
       });
@@ -265,36 +310,48 @@ const App = () => {
   };
 
   // --- ANALYSIS: PERFORMANCE ---
-  const runPerformanceAnalysis = (mode) => {
+  const runPerformanceAnalysis = (mode: 'hourly' | 'daily') => {
     setGranularity(mode);
     if (!fileData) return;
 
-    const indirects = fileData.filter(row => row.isIndirect);
+    // Type casting seguro
+    const data = fileData as PerformanceRow[];
+
+    const indirects = data.filter(row => row.isIndirect);
     setPerfIndirects(indirects);
 
-    const users = {};
-    const leaders = {};
+    const users: Record<string, PerformanceRow> = {};
+    const leaders: Record<string, { name: string, totalImpact: number }> = {};
 
-    fileData.forEach(row => {
+    data.forEach(row => {
       if (row.isIndirect) return;
       if (!users[row.nome]) {
-        users[row.nome] = { nome: row.nome, teamLeader: row.teamLeader, totalRows: 0, totalOffenses: 0, history: [] };
+        users[row.nome] = { 
+          ...row, 
+          totalRows: 0, 
+          totalOffenses: 0, 
+          history: [] 
+        };
       }
-      users[row.nome].totalRows++;
+      
+      // Asserção de tipo para propriedades opcionais
+      const user = users[row.nome];
+      if (user.totalRows !== undefined) user.totalRows++;
+      
       if (row.teamLeader && !leaders[row.teamLeader]) {
         leaders[row.teamLeader] = { name: row.teamLeader, totalImpact: 0 };
       }
       if (row.isOffender) {
-        users[row.nome].totalOffenses++;
+        if (user.totalOffenses !== undefined) user.totalOffenses++;
         if (row.teamLeader) leaders[row.teamLeader].totalImpact++;
       }
-      users[row.nome].history.push(row);
+      user.history?.push(row);
     });
 
     const rankingUsers = Object.values(users).map(user => {
       let maxStreak = 0;
       let currentStreak = 0;
-      user.history.forEach(row => {
+      user.history?.forEach(row => {
         if (row.isOffender) currentStreak++;
         else {
           if (currentStreak > maxStreak) maxStreak = currentStreak;
@@ -302,18 +359,27 @@ const App = () => {
         }
       });
       if (currentStreak > maxStreak) maxStreak = currentStreak;
-      return { ...user, maxStreak, offenseRate: user.totalRows > 0 ? (user.totalOffenses / user.totalRows) * 100 : 0 };
-    }).filter(u => u.totalOffenses > 0); 
+      
+      const totalOffenses = user.totalOffenses || 0;
+      const totalRows = user.totalRows || 0;
+
+      return { 
+        ...user, 
+        maxStreak, 
+        offenseRate: totalRows > 0 ? (totalOffenses / totalRows) * 100 : 0 
+      };
+    }).filter(u => (u.totalOffenses || 0) > 0); 
 
     rankingUsers.sort((a, b) => {
-      if (b.maxStreak !== a.maxStreak) return b.maxStreak - a.maxStreak;
-      return b.totalOffenses - a.totalOffenses;
+      if (b.maxStreak !== a.maxStreak) return (b.maxStreak || 0) - (a.maxStreak || 0);
+      return (b.totalOffenses || 0) - (a.totalOffenses || 0);
     });
 
-    const rankingLeaders = Object.values(leaders)
+    const rankingLeaders: LeaderStat[] = Object.values(leaders)
         .filter(l => l.totalImpact > 0)
         .sort((a, b) => b.totalImpact - a.totalImpact)
-        .slice(0, 3);
+        .slice(0, 3)
+        .map(l => ({ name: l.name, count: 0, totalImpact: l.totalImpact }));
 
     setPerfResults(rankingUsers);
     setPerfLeaders(rankingLeaders);
@@ -330,7 +396,7 @@ const App = () => {
     setDebugMode(false);
     setPerfViewMode('performance');
     setSetupViewMode('fast_start');
-    setAppMode(null); // Go back to home
+    setAppMode(null); 
   };
 
   const softReset = () => {
@@ -342,7 +408,6 @@ const App = () => {
 
   // --- RENDER ---
 
-  // 1. HOME SCREEN (Select Mode)
   if (!appMode) {
       return (
         <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -441,8 +506,52 @@ const App = () => {
                     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8">
                         <div className="flex items-center justify-between mb-8">
                             <h2 className="text-xl font-bold flex items-center gap-2"><CheckCircle className="text-green-500"/> Arquivo Carregado</h2>
-                            <button onClick={softReset} className="text-red-500 text-sm">Cancelar</button>
+                            <div className="flex gap-4">
+                                <button 
+                                  onClick={() => setDebugMode(!debugMode)}
+                                  className="flex items-center gap-2 text-slate-500 hover:text-blue-600 text-sm"
+                                >
+                                  <Eye size={16} />
+                                  {debugMode ? 'Ocultar Diagnóstico' : 'Ver Diagnóstico'}
+                                </button>
+                                <button onClick={softReset} className="text-red-500 text-sm">Cancelar</button>
+                            </div>
                         </div>
+
+                        {/* DEBUG TABLE */}
+                        {debugMode && (
+                          <div className="mb-8 p-4 bg-slate-100 rounded-lg overflow-x-auto">
+                            <h4 className="font-bold text-sm mb-2 text-slate-700">Diagnóstico (Primeiras 3 linhas):</h4>
+                            <table className="w-full text-xs text-left bg-white rounded border border-slate-300">
+                              <thead className="bg-slate-200">
+                                <tr>
+                                  <th className="p-2 border">Colab</th>
+                                  <th className="p-2 border">Leader</th>
+                                  <th className="p-2 border">Meta</th>
+                                  <th className="p-2 border">Tempo</th>
+                                  <th className="p-2 border">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {fileData.slice(0, 3).map((row: PerformanceRow, i) => (
+                                  <tr key={i} className="border-b">
+                                    <td className="p-2 border">{row.nome}</td>
+                                    <td className="p-2 border">{row.teamLeader}</td>
+                                    <td className="p-2 border">{row.meta}</td>
+                                    <td className="p-2 border">{row.tempoProcRaw}</td>
+                                    <td className="p-2 border font-bold">
+                                      {row.isIndirect ? 
+                                        <span className="text-orange-500">INDIRETO</span> : 
+                                        (row.isOffender ? <span className="text-red-600">OFENSOR</span> : <span className="text-green-600">OK</span>)
+                                      }
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
                         <div className="grid md:grid-cols-2 gap-4 max-w-2xl mx-auto">
                             <button onClick={() => runPerformanceAnalysis('hourly')} className="p-6 border-2 border-slate-100 hover:border-blue-500 rounded-xl text-left hover:bg-blue-50 transition-all">
                                 <span className="font-bold block text-lg mb-1 text-blue-900">Base em Horas</span>
@@ -517,7 +626,7 @@ const App = () => {
             </div>
         )}
 
-        {/* --- SETUP TIME ANALYZER DASHBOARD (NEW) --- */}
+        {/* --- SETUP TIME ANALYZER DASHBOARD --- */}
         {fileData && appMode === 'setup' && setupResults && (
             <div className="space-y-6">
                 
@@ -598,7 +707,7 @@ const App = () => {
                                     </tr>
                                 ))}
                                 {setupResults.fastStart.length === 0 && (
-                                    <tr><td colSpan="5" className="p-8 text-center text-slate-500">Nenhum ofensor de Fast Start encontrado!</td></tr>
+                                    <tr><td colSpan={5} className="p-8 text-center text-slate-500">Nenhum ofensor de Fast Start encontrado!</td></tr>
                                 )}
                             </tbody>
                         </table>
@@ -637,7 +746,7 @@ const App = () => {
                                     </tr>
                                 ))}
                                 {setupResults.strongFinish.length === 0 && (
-                                    <tr><td colSpan="5" className="p-8 text-center text-slate-500">Nenhum ofensor de Strong Finish encontrado!</td></tr>
+                                    <tr><td colSpan={5} className="p-8 text-center text-slate-500">Nenhum ofensor de Strong Finish encontrado!</td></tr>
                                 )}
                             </tbody>
                         </table>

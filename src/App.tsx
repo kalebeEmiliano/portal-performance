@@ -1,5 +1,5 @@
-import React, { useState, ChangeEvent } from 'react';
-import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Clock, Users, RefreshCcw, Eye, ShieldAlert, UserCheck, Timer, ArrowRight, Settings } from 'lucide-react';
+import { useState, type ChangeEvent } from 'react';
+import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Users, RefreshCcw, Eye, ShieldAlert, Timer, ArrowRight, Settings } from 'lucide-react';
 
 // --- INTERFACES (TIPAGENS PARA TYPESCRIPT) ---
 

@@ -60,8 +60,6 @@ const App = () => {
   const [appMode, setAppMode] = useState<'performance' | 'setup' | null>(null);
   
   // Common State
-  // Usamos 'any[]' aqui para simplificar o estado inicial que pode receber ambos os tipos,
-  // mas fazemos o cast correto nas funções de análise.
   const [fileData, setFileData] = useState<any[] | null>(null);
   const [fileName, setFileName] = useState<string>('');
   const [processing, setProcessing] = useState<boolean>(false);
@@ -410,7 +408,7 @@ const App = () => {
 
   if (!appMode) {
       return (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="min-h-screen w-full bg-slate-50 flex items-center justify-center p-4">
             <div className="max-w-4xl w-full">
                 <div className="text-center mb-12">
                     <h1 className="text-4xl font-bold text-slate-800 mb-4">Portal de Análise Operacional</h1>
@@ -453,8 +451,8 @@ const App = () => {
 
   // 2. MAIN APP CONTAINER
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-4 md:p-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8">
+      <div className="w-full mx-auto">
         
         {/* Header */}
         <header className="mb-8 border-b border-slate-200 pb-4 flex justify-between items-center">
@@ -476,7 +474,7 @@ const App = () => {
 
         {/* --- UPLOAD SECTION --- */}
         {!fileData && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center max-w-4xl mx-auto">
             <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 ${appMode === 'performance' ? 'bg-blue-50 text-blue-500' : 'bg-purple-50 text-purple-500'}`}>
               <Upload className="w-10 h-10" />
             </div>
@@ -503,7 +501,7 @@ const App = () => {
             <div className="space-y-6">
                 {!perfResults ? (
                     /* Config Screen Performance */
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8">
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 max-w-4xl mx-auto">
                         <div className="flex items-center justify-between mb-8">
                             <h2 className="text-xl font-bold flex items-center gap-2"><CheckCircle className="text-green-500"/> Arquivo Carregado</h2>
                             <div className="flex gap-4">

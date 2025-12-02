@@ -49,17 +49,16 @@ interface LunchRow {
   retornoCatraca: string;
   isCatracaOffender: boolean;
   
-  saidaBip: string; // Novo campo necessario
+  saidaBip: string; 
   retornoBip: string;
   
-  diffRetornoSec: number; // Tempo entre catraca e bip (Retorno)
+  diffRetornoSec: number; 
   diffRetornoFormatted: string;
   isRetornoOffender: boolean;
   
-  // Nova métrica: Tempo Total (Retorno Bip - Saída Bip)
   totalIntervalSec: number;
   totalIntervalFormatted: string;
-  isTotalIntervalOffender: boolean; // > 01:10:00
+  isTotalIntervalOffender: boolean;
 }
 
 interface LeaderStat {
@@ -86,7 +85,7 @@ interface SetupResults {
 interface LunchResults {
   catraca: LunchRow[];
   retorno: LunchRow[];
-  totalInterval: LunchRow[]; // Nova lista
+  totalInterval: LunchRow[]; 
   leaders: LeaderStat[];
   allRows: LunchRow[];
 }
@@ -153,10 +152,51 @@ const App = () => {
     return parseFloat(cleanStr) || 0;
   };
 
+  // Improved Date Parser to handle ISO, BR and Written PT-BR formats
   const parseDate = (dateStr: string): Date | null => {
     if (!dateStr) return null;
-    let d = new Date(dateStr.replace(/"/g, ''));
+    const cleanStr = dateStr.replace(/"/g, '').trim();
+    
+    // Attempt 1: Standard / ISO (YYYY-MM-DD)
+    let d = new Date(cleanStr);
     if (!isNaN(d.getTime())) return d;
+
+    // Attempt 2: PT-BR Written (e.g. "30 de nov. de 2025, 05:58:07")
+    // Map of months to index
+    const monthMap: {[key: string]: number} = {
+        'jan': 0, 'fev': 1, 'mar': 2, 'abr': 3, 'mai': 4, 'jun': 5,
+        'jul': 6, 'ago': 7, 'set': 8, 'out': 9, 'nov': 10, 'dez': 11
+    };
+
+    // Regex for "dd de MMM. de yyyy"
+    const writtenMatch = cleanStr.match(/^(\d{1,2})\s+de\s+([a-zç]{3})\.?\s+de\s+(\d{4})(?:,?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/i);
+    if (writtenMatch) {
+        const day = parseInt(writtenMatch[1], 10);
+        const monthStr = writtenMatch[2].toLowerCase();
+        const year = parseInt(writtenMatch[3], 10);
+        const hour = writtenMatch[4] ? parseInt(writtenMatch[4], 10) : 0;
+        const min = writtenMatch[5] ? parseInt(writtenMatch[5], 10) : 0;
+        const sec = writtenMatch[6] ? parseInt(writtenMatch[6], 10) : 0;
+
+        if (monthMap.hasOwnProperty(monthStr)) {
+            d = new Date(year, monthMap[monthStr], day, hour, min, sec);
+            if (!isNaN(d.getTime())) return d;
+        }
+    }
+
+    // Attempt 3: PT-BR Numeric (DD/MM/YYYY or DD-MM-YYYY)
+    const ptBrMatch = cleanStr.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+    if (ptBrMatch) {
+        const day = parseInt(ptBrMatch[1], 10);
+        const month = parseInt(ptBrMatch[2], 10) - 1;
+        const year = parseInt(ptBrMatch[3], 10);
+        const hour = ptBrMatch[4] ? parseInt(ptBrMatch[4], 10) : 0;
+        const min = ptBrMatch[5] ? parseInt(ptBrMatch[5], 10) : 0;
+        const sec = ptBrMatch[6] ? parseInt(ptBrMatch[6], 10) : 0;
+        d = new Date(year, month, day, hour, min, sec);
+        if (!isNaN(d.getTime())) return d;
+    }
+
     return null;
   };
 
@@ -273,33 +313,47 @@ const App = () => {
     } catch (error) { console.error(error); alert("Erro crítico ao processar arquivo."); setProcessing(false); }
   };
 
-  // --- PARSER: SETUP TIME ---
+  // --- PARSER: SETUP TIME (ATUALIZADO) ---
   const processSetupCSV = (text: string) => {
     try {
       const lines = text.split('\n').filter(line => line.trim() !== '');
-      const IDX_NOME = 2;
-      const IDX_LEADER = 3;
-      const IDX_CLOCK_IN = 6;
-      const IDX_PRIMEIRO_BIP = 8;
-      const IDX_TEMPO_BIP_ENTRADA = 11;
-      const IDX_ULTIMO_BIP = 17;
-      const IDX_TARGET_SAIDA = 19;
-      const IDX_CLOCK_OUT = 20;
+      
+      const headerLine = lines[0];
+      const headers = headerLine.split(',').map(h => h.trim().replace(/^"|"$/g, '').toUpperCase());
+
+      const findIndex = (keywords: string[]) => headers.findIndex(h => keywords.some(k => h.includes(k)));
+
+      const IDX_NOME = findIndex(['NOME']);
+      const IDX_LEADER = findIndex(['TL', 'TEAM LEADER', 'LIDER']);
+      const IDX_CLOCK_IN = findIndex(['CLOCK IN']);
+      const IDX_PRIMEIRO_BIP = findIndex(['PRIMEIRO BIP']);
+      const IDX_TEMPO_BIP_ENTRADA = findIndex(['TEMPO DE BIP ENTRADA']);
+      const IDX_ULTIMO_BIP = findIndex(['ÚLTIMO BIP', 'ULTIMO BIP']);
+      const IDX_TARGET_SAIDA = findIndex(['DATETIME TARGET SAIDA', 'TARGET SAIDA']);
+      const IDX_CLOCK_OUT = findIndex(['CLOCK OUT']);
+
+      if (IDX_NOME === -1 || IDX_TEMPO_BIP_ENTRADA === -1) {
+          alert("Erro: Colunas obrigatórias não encontradas. Verifique se o arquivo tem 'NOME' e 'TEMPO DE BIP ENTRADA'.");
+          setProcessing(false);
+          return;
+      }
 
       const parsedData: SetupRow[] = lines.slice(1).map((line, index) => {
         const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
-        if (cols.length < 12) return null; 
-        const cleanCol = (val: string) => val ? val.trim().replace(/^"|"$/g, '') : '';
+        const maxIndex = Math.max(IDX_NOME, IDX_LEADER, IDX_CLOCK_IN, IDX_PRIMEIRO_BIP, IDX_TEMPO_BIP_ENTRADA, IDX_ULTIMO_BIP, IDX_TARGET_SAIDA, IDX_CLOCK_OUT);
+        if (cols.length <= maxIndex) return null;
 
-        const nome = cleanCol(cols[IDX_NOME]);
-        const teamLeader = cleanCol(cols[IDX_LEADER]);
-        const clockIn = cleanCol(cols[IDX_CLOCK_IN]);
-        const primeiroBip = cleanCol(cols[IDX_PRIMEIRO_BIP]);
-        const tempoBipEntrada = cleanCol(cols[IDX_TEMPO_BIP_ENTRADA]);
+        const cleanCol = (idx: number) => (idx !== -1 && cols[idx]) ? cols[idx].trim().replace(/^"|"$/g, '') : '';
+
+        const nome = cleanCol(IDX_NOME);
+        const teamLeader = cleanCol(IDX_LEADER);
+        const clockIn = cleanCol(IDX_CLOCK_IN);
+        const primeiroBip = cleanCol(IDX_PRIMEIRO_BIP);
+        const tempoBipEntrada = cleanCol(IDX_TEMPO_BIP_ENTRADA);
         const tempoBipEntradaSec = timeToSeconds(tempoBipEntrada);
-        const ultimoBipRaw = cleanCol(cols[IDX_ULTIMO_BIP]);
-        const targetSaidaRaw = cleanCol(cols[IDX_TARGET_SAIDA]);
-        const clockOutRaw = cleanCol(cols[IDX_CLOCK_OUT]);
+        const ultimoBipRaw = cleanCol(IDX_ULTIMO_BIP);
+        const targetSaidaRaw = cleanCol(IDX_TARGET_SAIDA);
+        const clockOutRaw = cleanCol(IDX_CLOCK_OUT);
 
         const isFastStartOffender = tempoBipEntradaSec > 900;
         let isStrongFinishOffender = false;
@@ -314,6 +368,7 @@ const App = () => {
             const diffEarlySec = getDifferenceInSeconds(dateTarget, dateUltimo);
             diffExitSec = diffEarlySec; 
             
+            // Regra: Parou mais de 5min (300s) ANTES do alvo
             if (diffEarlySec > 300) { 
                 isStrongFinishOffender = true; 
                 sfReason = 'Parou muito cedo (>5min)'; 
@@ -391,14 +446,10 @@ const App = () => {
   const processLunchCSV = (text: string) => {
     try {
       const lines = text.split('\n').filter(line => line.trim() !== '');
-      // Indices
-      // 3: TL, 4: Representante, 7: Tempo Catraca
-      // 11: Saida BIP, 12: Saida Catraca, 13: Retorno Catraca, 14: Retorno BIP
-      
       const IDX_TL = 3;
       const IDX_NOME = 4;
       const IDX_TEMPO_CATRACA = 7;
-      const IDX_SAIDA_BIP = 11; // Novo
+      const IDX_SAIDA_BIP = 11; 
       const IDX_SAIDA_CATRACA = 12;
       const IDX_RETORNO_CATRACA = 13;
       const IDX_RETORNO_BIP = 14;
@@ -414,12 +465,11 @@ const App = () => {
         const tempoCatracaRaw = cleanCol(cols[IDX_TEMPO_CATRACA]);
         const tempoCatracaSec = timeToSeconds(tempoCatracaRaw);
         
-        const saidaBip = cleanCol(cols[IDX_SAIDA_BIP]); // Novo
+        const saidaBip = cleanCol(cols[IDX_SAIDA_BIP]); 
         const saidaCatraca = cleanCol(cols[IDX_SAIDA_CATRACA]);
         const retornoCatraca = cleanCol(cols[IDX_RETORNO_CATRACA]);
         const retornoBip = cleanCol(cols[IDX_RETORNO_BIP]);
 
-        // Regra 1: Catraca > 01:00:30 (3630 segundos)
         const isCatracaOffender = tempoCatracaSec > 3630;
         
         let diffRetornoSec = 0;
@@ -431,14 +481,11 @@ const App = () => {
         const dateRetornoCatraca = parseDate(retornoCatraca);
         const dateRetornoBip = parseDate(retornoBip);
 
-        // Regra 2: Atraso Retorno > 10 min (600s)
         if (dateRetornoCatraca && dateRetornoBip) {
             diffRetornoSec = getDifferenceInSeconds(dateRetornoBip, dateRetornoCatraca);
             if (diffRetornoSec > 600) { isRetornoOffender = true; }
         }
 
-        // Regra 3 (Ajustada): Tempo Total = Retorno BIP - Saida BIP
-        // Limite: 01:10:00 (4200 segundos)
         if (dateSaidaBip && dateRetornoBip) {
             totalIntervalSec = getDifferenceInSeconds(dateRetornoBip, dateSaidaBip);
             if (totalIntervalSec > 4200) {
@@ -461,7 +508,6 @@ const App = () => {
       const retornoOffenders = parsedData.filter(d => d.isRetornoOffender);
       const totalIntervalOffenders = parsedData.filter(d => d.isTotalIntervalOffender);
       
-      // Stats Leaders
       const leadersStats: Record<string, { 
           totalImpact: number, totalRows: number, offendersSet: Set<string>,
           sumCatraca: number, countCatraca: number,
@@ -539,7 +585,6 @@ const App = () => {
       const user = users[row.nome];
       if (user.totalRows !== undefined) user.totalRows++;
       
-      // Leader Stats Agregation
       if (row.teamLeader) {
           if (!leadersStats[row.teamLeader]) { 
               leadersStats[row.teamLeader] = { 
@@ -551,11 +596,11 @@ const App = () => {
           }
           const stats = leadersStats[row.teamLeader];
           stats.totalRows++;
-          stats.sumProd += row.prodLiq || 0; // Somar produtividade
+          stats.sumProd += row.prodLiq || 0; 
 
           if (row.isOffender) {
               stats.totalImpact++;
-              stats.offendersSet.add(row.nome); // Adicionar nome ao Set (unicos)
+              stats.offendersSet.add(row.nome);
           }
       }
 
@@ -588,8 +633,8 @@ const App = () => {
             totalImpact: stats.totalImpact,
             totalRows: stats.totalRows,
             offensePercentage: stats.totalRows > 0 ? (stats.totalImpact / stats.totalRows) * 100 : 0,
-            uniqueOffenders: stats.offendersSet.size, // Contagem de pessoas unicas
-            avgProd: stats.totalRows > 0 ? (stats.sumProd / stats.totalRows) : 0 // Media de Produtividade
+            uniqueOffenders: stats.offendersSet.size,
+            avgProd: stats.totalRows > 0 ? (stats.sumProd / stats.totalRows) : 0
         }))
         .filter(l => (l.totalImpact || 0) > 0)
         .sort((a, b) => (b.uniqueOffenders || 0) - (a.uniqueOffenders || 0));
@@ -878,8 +923,42 @@ const App = () => {
             <div className="space-y-6 w-full">
                 <div className="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200 shadow-sm w-full">
                     <div className="flex items-center gap-2"><span className="font-bold text-slate-700">Arquivo:</span><span className="text-slate-500 text-sm">{fileName}</span></div>
-                    <button onClick={softReset} className="text-red-500 hover:text-red-700 text-sm font-medium">Trocar Arquivo</button>
+                    
+                    <div className="flex gap-4">
+                        <button onClick={() => setDebugMode(!debugMode)} className="flex items-center gap-2 text-slate-500 hover:text-blue-600 text-sm"><Eye size={16} /> Diag</button>
+                        <button onClick={softReset} className="text-red-500 hover:text-red-700 text-sm font-medium">Trocar Arquivo</button>
+                    </div>
                 </div>
+
+                {debugMode && (
+                    <div className="mb-8 p-4 bg-slate-100 rounded-lg overflow-x-auto">
+                    <h4 className="font-bold text-sm mb-2 text-slate-700">Diagnóstico Setup (Primeiras 3 linhas):</h4>
+                    <table className="w-full text-xs text-left bg-white rounded border border-slate-300">
+                        <thead className="bg-slate-200">
+                        <tr>
+                            <th className="p-2 border">Colab</th>
+                            <th className="p-2 border">Último Bip</th>
+                            <th className="p-2 border">Target Saída</th>
+                            <th className="p-2 border">Diff Exit (s)</th>
+                            <th className="p-2 border">Status</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {setupResults.allRows.slice(0, 3).map((row: SetupRow, i) => (
+                            <tr key={i} className="border-b">
+                            <td className="p-2 border">{row.nome}</td>
+                            <td className="p-2 border">{row.ultimoBipRaw}</td>
+                            <td className="p-2 border">{row.targetSaidaRaw}</td>
+                            <td className="p-2 border">{row.diffExitSec}</td>
+                            <td className="p-2 border font-bold">
+                                {row.isStrongFinishOffender ? <span className="text-red-600">NOK</span> : <span className="text-green-600">OK</span>}
+                            </td>
+                            </tr>
+                        ))}
+                        </tbody>
+                    </table>
+                    </div>
+                )}
                 
                 <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 w-full">
                     <button onClick={() => setSetupViewMode('fast_start')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'fast_start' ? 'border-red-500 text-red-600 bg-red-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Timer size={18}/> Fast Start <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(setupResults.fastStart).length}</span></button>

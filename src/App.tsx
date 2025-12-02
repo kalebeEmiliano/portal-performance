@@ -1,7 +1,7 @@
-import { useState, type ChangeEvent } from 'react';
-import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Users, RefreshCcw, Eye, ShieldAlert, Timer, ArrowRight, Settings } from 'lucide-react';
+import { useState, type ChangeEvent, useMemo } from 'react';
+import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Users, RefreshCcw, Eye, ShieldAlert, Timer, ArrowRight, Settings, Coffee, Clock, Filter, BarChart, Percent, TrendingUp } from 'lucide-react';
 
-// --- INTERFACES (TIPAGENS PARA TYPESCRIPT) ---
+// --- INTERFACES (TIPAGENS) ---
 
 interface PerformanceRow {
   id: number;
@@ -15,7 +15,6 @@ interface PerformanceRow {
   unidades: number;
   isIndirect: boolean;
   isOffender: boolean;
-  // Campos calculados na análise
   maxStreak?: number;
   totalOffenses?: number;
   totalRows?: number;
@@ -27,54 +26,101 @@ interface SetupRow {
   id: number;
   nome: string;
   teamLeader: string;
-  // Fast Start
   clockIn: string;
   primeiroBip: string;
   tempoBipEntrada: string;
   tempoBipEntradaSec: number;
   isFastStartOffender: boolean;
-  // Strong Finish
   ultimoBipRaw: string;
   targetSaidaRaw: string;
   clockOutRaw: string;
   isStrongFinishOffender: boolean;
   sfReason: string;
+  diffExitSec: number;
+}
+
+interface LunchRow {
+  id: number;
+  nome: string;
+  teamLeader: string;
+  tempoCatracaRaw: string;
+  tempoCatracaSec: number;
+  saidaCatraca: string;
+  retornoCatraca: string;
+  isCatracaOffender: boolean;
+  
+  saidaBip: string; // Novo campo necessario
+  retornoBip: string;
+  
+  diffRetornoSec: number; // Tempo entre catraca e bip (Retorno)
+  diffRetornoFormatted: string;
+  isRetornoOffender: boolean;
+  
+  // Nova métrica: Tempo Total (Retorno Bip - Saída Bip)
+  totalIntervalSec: number;
+  totalIntervalFormatted: string;
+  isTotalIntervalOffender: boolean; // > 01:10:00
 }
 
 interface LeaderStat {
   name: string;
-  count: number; // Para Setup
-  totalImpact?: number; // Para Performance
+  totalImpact: number;
+  totalRows: number;
+  offensePercentage: number;
+  uniqueOffenders: number;
+  
+  avgProd?: number;        
+  avgFirstBip?: number;    
+  avgExitDiff?: number;    
+  avgCatraca?: number;     
+  avgRetorno?: number;     
 }
 
 interface SetupResults {
   fastStart: SetupRow[];
   strongFinish: SetupRow[];
   leaders: LeaderStat[];
+  allRows: SetupRow[];
+}
+
+interface LunchResults {
+  catraca: LunchRow[];
+  retorno: LunchRow[];
+  totalInterval: LunchRow[]; // Nova lista
+  leaders: LeaderStat[];
+  allRows: LunchRow[];
 }
 
 // --- APP ---
 
 const App = () => {
   // Global State
-  const [appMode, setAppMode] = useState<'performance' | 'setup' | null>(null);
+  const [appMode, setAppMode] = useState<'performance' | 'setup' | 'lunch' | null>(null);
   
   // Common State
   const [fileData, setFileData] = useState<any[] | null>(null);
   const [fileName, setFileName] = useState<string>('');
   const [processing, setProcessing] = useState<boolean>(false);
   const [debugMode, setDebugMode] = useState<boolean>(false);
+
+  // Filters State
+  const [selectedLeader, setSelectedLeader] = useState<string>('Todos');
+  const [selectedCollaborator, setSelectedCollaborator] = useState<string>('Todos');
   
-  // Performance Mode State
+  // Performance State
   const [granularity, setGranularity] = useState<'hourly' | 'daily' | null>(null);
-  const [perfViewMode, setPerfViewMode] = useState<'performance' | 'indirects'>('performance');
+  const [perfViewMode, setPerfViewMode] = useState<'performance' | 'leaders' | 'indirects'>('performance');
   const [perfResults, setPerfResults] = useState<PerformanceRow[] | null>(null);
   const [perfLeaders, setPerfLeaders] = useState<LeaderStat[]>([]);
   const [perfIndirects, setPerfIndirects] = useState<PerformanceRow[]>([]);
 
-  // Setup Mode State
-  const [setupViewMode, setSetupViewMode] = useState<'fast_start' | 'strong_finish'>('fast_start');
+  // Setup State
+  const [setupViewMode, setSetupViewMode] = useState<'fast_start' | 'strong_finish' | 'leaders'>('fast_start');
   const [setupResults, setSetupResults] = useState<SetupResults | null>(null);
+
+  // Lunch State
+  const [lunchViewMode, setLunchViewMode] = useState<'catraca' | 'retorno' | 'total' | 'leaders'>('catraca');
+  const [lunchResults, setLunchResults] = useState<LunchResults | null>(null);
 
   // --- HELPERS ---
 
@@ -90,6 +136,14 @@ const App = () => {
     } catch (e) {
       return 0;
     }
+  };
+
+  const secondsToTime = (seconds: number): string => {
+    const absSeconds = Math.abs(seconds);
+    const h = Math.floor(absSeconds / 3600).toString().padStart(2, '0');
+    const m = Math.floor((absSeconds % 3600) / 60).toString().padStart(2, '0');
+    const s = Math.floor(absSeconds % 60).toString().padStart(2, '0');
+    return `${seconds < 0 ? '-' : ''}${h}:${m}:${s}`;
   };
 
   const parseBrazilianNumber = (numStr: string): number => {
@@ -112,6 +166,41 @@ const App = () => {
     return Math.floor(diffMs / 60000);
   };
 
+  const getDifferenceInSeconds = (dateA: Date, dateB: Date): number => {
+    if (!dateA || !dateB) return 0;
+    const diffMs = dateA.getTime() - dateB.getTime(); 
+    return Math.floor(diffMs / 1000);
+  };
+
+  // --- FILTER LOGIC ---
+
+  const availableLeaders = useMemo(() => {
+    if (!fileData) return [];
+    const leaders = new Set<string>();
+    fileData.forEach(row => {
+      if (row.teamLeader) leaders.add(row.teamLeader);
+    });
+    return Array.from(leaders).sort();
+  }, [fileData]);
+
+  const availableCollaborators = useMemo(() => {
+    if (!fileData) return [];
+    const colabs = new Set<string>();
+    fileData.forEach(row => {
+      if (selectedLeader !== 'Todos' && row.teamLeader !== selectedLeader) return;
+      if (row.nome) colabs.add(row.nome);
+    });
+    return Array.from(colabs).sort();
+  }, [fileData, selectedLeader]);
+
+  const applyFilters = <T extends { teamLeader: string, nome: string }>(list: T[]) => {
+    return list.filter(item => {
+      const leaderMatch = selectedLeader === 'Todos' || item.teamLeader === selectedLeader;
+      const colabMatch = selectedCollaborator === 'Todos' || item.nome === selectedCollaborator;
+      return leaderMatch && colabMatch;
+    });
+  };
+
   // --- HANDLERS ---
 
   const handleFileUpload = (event: ChangeEvent<HTMLInputElement>) => {
@@ -127,8 +216,10 @@ const App = () => {
       if (typeof text === 'string') {
         if (appMode === 'performance') {
           processPerformanceCSV(text);
-        } else {
+        } else if (appMode === 'setup') {
           processSetupCSV(text);
+        } else {
+          processLunchCSV(text);
         }
       }
     };
@@ -173,32 +264,13 @@ const App = () => {
         const isOffender = (tempoProcSec >= 3600) && (prodLiq < meta) && !isIndirect;
 
         return { 
-          id: index, 
-          nome, 
-          teamLeader, 
-          periodo, 
-          meta, 
-          prodLiq, 
-          tempoProcRaw, 
-          tempoProcSec, 
-          unidades, 
-          isIndirect, 
-          isOffender 
+          id: index, nome, teamLeader, periodo, meta, prodLiq, tempoProcRaw, tempoProcSec, unidades, isIndirect, isOffender 
         };
       }).filter((item): item is PerformanceRow => item !== null);
 
-      if (parsedData.length === 0) {
-        alert("Nenhum dado válido. Verifique o layout de Performance.");
-        setProcessing(false);
-        return;
-      }
-      setFileData(parsedData);
-      setProcessing(false);
-    } catch (error) {
-      console.error(error);
-      alert("Erro crítico ao processar arquivo.");
-      setProcessing(false);
-    }
+      if (parsedData.length === 0) { alert("Nenhum dado válido. Verifique o layout."); setProcessing(false); return; }
+      setFileData(parsedData); setProcessing(false);
+    } catch (error) { console.error(error); alert("Erro crítico ao processar arquivo."); setProcessing(false); }
   };
 
   // --- PARSER: SETUP TIME ---
@@ -221,151 +293,287 @@ const App = () => {
 
         const nome = cleanCol(cols[IDX_NOME]);
         const teamLeader = cleanCol(cols[IDX_LEADER]);
-        
         const clockIn = cleanCol(cols[IDX_CLOCK_IN]);
         const primeiroBip = cleanCol(cols[IDX_PRIMEIRO_BIP]);
         const tempoBipEntrada = cleanCol(cols[IDX_TEMPO_BIP_ENTRADA]);
         const tempoBipEntradaSec = timeToSeconds(tempoBipEntrada);
-
         const ultimoBipRaw = cleanCol(cols[IDX_ULTIMO_BIP]);
         const targetSaidaRaw = cleanCol(cols[IDX_TARGET_SAIDA]);
         const clockOutRaw = cleanCol(cols[IDX_CLOCK_OUT]);
 
         const isFastStartOffender = tempoBipEntradaSec > 900;
-
         let isStrongFinishOffender = false;
         let sfReason = '';
+        let diffExitSec = 0;
 
         const dateUltimo = parseDate(ultimoBipRaw);
         const dateTarget = parseDate(targetSaidaRaw);
         const dateClockOut = parseDate(clockOutRaw);
 
         if (dateUltimo && dateTarget) {
-            if (dateUltimo < dateTarget) {
-                isStrongFinishOffender = true;
-                sfReason = 'Parou antes da meta';
+            const diffEarlySec = getDifferenceInSeconds(dateTarget, dateUltimo);
+            diffExitSec = diffEarlySec; 
+            
+            if (diffEarlySec > 300) { 
+                isStrongFinishOffender = true; 
+                sfReason = 'Parou muito cedo (>5min)'; 
             }
             else if (dateClockOut) {
                 const diffMins = getDifferenceInMinutes(dateClockOut, dateUltimo);
-                if (diffMins > 5) {
-                    isStrongFinishOffender = true;
-                    sfReason = 'Demora na saída (>5min)';
+                if (diffMins > 5) { 
+                    isStrongFinishOffender = true; 
+                    sfReason = 'Demora na saída (>5min)'; 
                 }
             }
         }
 
         return {
-            id: index,
-            nome,
-            teamLeader,
-            clockIn,
-            primeiroBip,
-            tempoBipEntrada,
-            tempoBipEntradaSec,
-            isFastStartOffender,
-            ultimoBipRaw,
-            targetSaidaRaw,
-            clockOutRaw,
-            isStrongFinishOffender,
-            sfReason
+            id: index, nome, teamLeader, clockIn, primeiroBip, tempoBipEntrada, tempoBipEntradaSec, isFastStartOffender,
+            ultimoBipRaw, targetSaidaRaw, clockOutRaw, isStrongFinishOffender, sfReason, diffExitSec
         };
       }).filter((item): item is SetupRow => item !== null);
 
-      if (parsedData.length === 0) {
-        alert("Nenhum dado válido. Verifique o layout de Setup Time.");
-        setProcessing(false);
-        return;
-      }
-
+      if (parsedData.length === 0) { alert("Nenhum dado válido. Verifique o layout."); setProcessing(false); return; }
       setFileData(parsedData);
       
       const fsOffenders = parsedData.filter(d => d.isFastStartOffender);
       const sfOffenders = parsedData.filter(d => d.isStrongFinishOffender);
       
-      const leaders: Record<string, number> = {};
-      [...fsOffenders, ...sfOffenders].forEach(row => {
-          if(!row.teamLeader) return;
-          if(!leaders[row.teamLeader]) leaders[row.teamLeader] = 0;
-          leaders[row.teamLeader]++;
-      });
-      const leaderRanking: LeaderStat[] = Object.entries(leaders)
-        .sort(([,a], [,b]) => b - a)
-        .slice(0, 3)
-        .map(([name, count]) => ({ name, count }));
+      const leadersStats: Record<string, { 
+          totalImpact: number, totalRows: number, offendersSet: Set<string>,
+          sumFirstBip: number, countFirstBip: number,
+          sumExitDiff: number, countExitDiff: number
+      }> = {};
 
-      setSetupResults({
-          fastStart: fsOffenders.sort((a,b) => b.tempoBipEntradaSec - a.tempoBipEntradaSec), 
-          strongFinish: sfOffenders,
-          leaders: leaderRanking
+      parsedData.forEach(row => {
+          if (!row.teamLeader) return;
+          if (!leadersStats[row.teamLeader]) {
+              leadersStats[row.teamLeader] = { 
+                  totalImpact: 0, totalRows: 0, offendersSet: new Set(),
+                  sumFirstBip: 0, countFirstBip: 0, sumExitDiff: 0, countExitDiff: 0
+              };
+          }
+          const stats = leadersStats[row.teamLeader];
+          stats.totalRows++;
+          
+          if (row.tempoBipEntradaSec > 0) {
+              stats.sumFirstBip += row.tempoBipEntradaSec;
+              stats.countFirstBip++;
+          }
+          if (row.diffExitSec !== 0) {
+              stats.sumExitDiff += row.diffExitSec;
+              stats.countExitDiff++;
+          }
+
+          if (row.isFastStartOffender || row.isStrongFinishOffender) {
+              stats.totalImpact++;
+              stats.offendersSet.add(row.nome);
+          }
       });
 
+      const leaderRanking: LeaderStat[] = Object.entries(leadersStats).map(([name, stats]) => ({
+          name,
+          count: 0,
+          totalImpact: stats.totalImpact,
+          totalRows: stats.totalRows,
+          offensePercentage: stats.totalRows > 0 ? (stats.totalImpact / stats.totalRows) * 100 : 0,
+          uniqueOffenders: stats.offendersSet.size,
+          avgFirstBip: stats.countFirstBip > 0 ? stats.sumFirstBip / stats.countFirstBip : 0,
+          avgExitDiff: stats.countExitDiff > 0 ? stats.sumExitDiff / stats.countExitDiff : 0
+      })).sort((a, b) => (b.uniqueOffenders || 0) - (a.uniqueOffenders || 0));
+
+      setSetupResults({ fastStart: fsOffenders.sort((a,b) => b.tempoBipEntradaSec - a.tempoBipEntradaSec), strongFinish: sfOffenders, leaders: leaderRanking, allRows: parsedData });
       setProcessing(false);
-    } catch (error) {
-      console.error(error);
-      alert("Erro ao processar Setup Time.");
-      setProcessing(false);
-    }
+    } catch (error) { console.error(error); alert("Erro ao processar."); setProcessing(false); }
   };
+
+  // --- PARSER: LUNCH (INTERVALO) ---
+  const processLunchCSV = (text: string) => {
+    try {
+      const lines = text.split('\n').filter(line => line.trim() !== '');
+      // Indices
+      // 3: TL, 4: Representante, 7: Tempo Catraca
+      // 11: Saida BIP, 12: Saida Catraca, 13: Retorno Catraca, 14: Retorno BIP
+      
+      const IDX_TL = 3;
+      const IDX_NOME = 4;
+      const IDX_TEMPO_CATRACA = 7;
+      const IDX_SAIDA_BIP = 11; // Novo
+      const IDX_SAIDA_CATRACA = 12;
+      const IDX_RETORNO_CATRACA = 13;
+      const IDX_RETORNO_BIP = 14;
+
+      const parsedData: LunchRow[] = lines.slice(1).map((line, index) => {
+        const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+        if (cols.length < 15) return null;
+        const cleanCol = (val: string) => val ? val.trim().replace(/^"|"$/g, '') : '';
+
+        const nome = cleanCol(cols[IDX_NOME]);
+        const teamLeader = cleanCol(cols[IDX_TL]);
+        
+        const tempoCatracaRaw = cleanCol(cols[IDX_TEMPO_CATRACA]);
+        const tempoCatracaSec = timeToSeconds(tempoCatracaRaw);
+        
+        const saidaBip = cleanCol(cols[IDX_SAIDA_BIP]); // Novo
+        const saidaCatraca = cleanCol(cols[IDX_SAIDA_CATRACA]);
+        const retornoCatraca = cleanCol(cols[IDX_RETORNO_CATRACA]);
+        const retornoBip = cleanCol(cols[IDX_RETORNO_BIP]);
+
+        // Regra 1: Catraca > 01:00:30 (3630 segundos)
+        const isCatracaOffender = tempoCatracaSec > 3630;
+        
+        let diffRetornoSec = 0;
+        let totalIntervalSec = 0;
+        let isRetornoOffender = false;
+        let isTotalIntervalOffender = false;
+        
+        const dateSaidaBip = parseDate(saidaBip);
+        const dateRetornoCatraca = parseDate(retornoCatraca);
+        const dateRetornoBip = parseDate(retornoBip);
+
+        // Regra 2: Atraso Retorno > 10 min (600s)
+        if (dateRetornoCatraca && dateRetornoBip) {
+            diffRetornoSec = getDifferenceInSeconds(dateRetornoBip, dateRetornoCatraca);
+            if (diffRetornoSec > 600) { isRetornoOffender = true; }
+        }
+
+        // Regra 3 (Ajustada): Tempo Total = Retorno BIP - Saida BIP
+        // Limite: 01:10:00 (4200 segundos)
+        if (dateSaidaBip && dateRetornoBip) {
+            totalIntervalSec = getDifferenceInSeconds(dateRetornoBip, dateSaidaBip);
+            if (totalIntervalSec > 4200) {
+                isTotalIntervalOffender = true;
+            }
+        }
+
+        return {
+            id: index, nome, teamLeader, tempoCatracaRaw, tempoCatracaSec, saidaCatraca, retornoCatraca, isCatracaOffender,
+            saidaBip, retornoBip, 
+            diffRetornoSec, diffRetornoFormatted: secondsToTime(diffRetornoSec), isRetornoOffender,
+            totalIntervalSec, totalIntervalFormatted: secondsToTime(totalIntervalSec), isTotalIntervalOffender
+        };
+      }).filter((item): item is LunchRow => item !== null);
+
+      if (parsedData.length === 0) { alert("Nenhum dado válido. Verifique o layout."); setProcessing(false); return; }
+      setFileData(parsedData);
+
+      const catracaOffenders = parsedData.filter(d => d.isCatracaOffender);
+      const retornoOffenders = parsedData.filter(d => d.isRetornoOffender);
+      const totalIntervalOffenders = parsedData.filter(d => d.isTotalIntervalOffender);
+      
+      // Stats Leaders
+      const leadersStats: Record<string, { 
+          totalImpact: number, totalRows: number, offendersSet: Set<string>,
+          sumCatraca: number, countCatraca: number,
+          sumRetorno: number, countRetorno: number
+      }> = {};
+
+      parsedData.forEach(row => {
+          if (!row.teamLeader) return;
+          if (!leadersStats[row.teamLeader]) {
+              leadersStats[row.teamLeader] = { 
+                  totalImpact: 0, totalRows: 0, offendersSet: new Set(),
+                  sumCatraca: 0, countCatraca: 0, sumRetorno: 0, countRetorno: 0
+              };
+          }
+          const stats = leadersStats[row.teamLeader];
+          stats.totalRows++;
+          
+          if (row.tempoCatracaSec > 0) {
+              stats.sumCatraca += row.tempoCatracaSec;
+              stats.countCatraca++;
+          }
+          if (row.diffRetornoSec > 0) {
+              stats.sumRetorno += row.diffRetornoSec;
+              stats.countRetorno++;
+          }
+
+          if (row.isCatracaOffender || row.isRetornoOffender || row.isTotalIntervalOffender) {
+              stats.totalImpact++;
+              stats.offendersSet.add(row.nome);
+          }
+      });
+
+      const leaderRanking: LeaderStat[] = Object.entries(leadersStats).map(([name, stats]) => ({
+          name,
+          count: 0,
+          totalImpact: stats.totalImpact,
+          totalRows: stats.totalRows,
+          offensePercentage: stats.totalRows > 0 ? (stats.totalImpact / stats.totalRows) * 100 : 0,
+          uniqueOffenders: stats.offendersSet.size,
+          avgCatraca: stats.countCatraca > 0 ? stats.sumCatraca / stats.countCatraca : 0,
+          avgRetorno: stats.countRetorno > 0 ? stats.sumRetorno / stats.countRetorno : 0
+      })).sort((a, b) => (b.uniqueOffenders || 0) - (a.uniqueOffenders || 0));
+
+      setLunchResults({ 
+          catraca: catracaOffenders.sort((a,b) => b.tempoCatracaSec - a.tempoCatracaSec), 
+          retorno: retornoOffenders.sort((a,b) => b.diffRetornoSec - a.diffRetornoSec), 
+          totalInterval: totalIntervalOffenders.sort((a,b) => b.totalIntervalSec - a.totalIntervalSec),
+          leaders: leaderRanking, 
+          allRows: parsedData 
+      });
+      setProcessing(false);
+    } catch (e) { console.error(e); alert("Erro ao processar Intervalo."); setProcessing(false); }
+  }
 
   // --- ANALYSIS: PERFORMANCE ---
   const runPerformanceAnalysis = (mode: 'hourly' | 'daily') => {
     setGranularity(mode);
     if (!fileData) return;
-
-    // Type casting seguro
     const data = fileData as PerformanceRow[];
-
     const indirects = data.filter(row => row.isIndirect);
     setPerfIndirects(indirects);
 
     const users: Record<string, PerformanceRow> = {};
-    const leaders: Record<string, { name: string, totalImpact: number }> = {};
+    const leadersStats: Record<string, { 
+        totalImpact: number, 
+        totalRows: number, 
+        sumProd: number, 
+        offendersSet: Set<string>
+    }> = {};
 
     data.forEach(row => {
       if (row.isIndirect) return;
-      if (!users[row.nome]) {
-        users[row.nome] = { 
-          ...row, 
-          totalRows: 0, 
-          totalOffenses: 0, 
-          history: [] 
-        };
-      }
+      if (!users[row.nome]) { users[row.nome] = { ...row, totalRows: 0, totalOffenses: 0, history: [] }; }
       
-      // Asserção de tipo para propriedades opcionais
       const user = users[row.nome];
       if (user.totalRows !== undefined) user.totalRows++;
       
-      if (row.teamLeader && !leaders[row.teamLeader]) {
-        leaders[row.teamLeader] = { name: row.teamLeader, totalImpact: 0 };
+      // Leader Stats Agregation
+      if (row.teamLeader) {
+          if (!leadersStats[row.teamLeader]) { 
+              leadersStats[row.teamLeader] = { 
+                  totalImpact: 0, 
+                  totalRows: 0, 
+                  sumProd: 0, 
+                  offendersSet: new Set()
+              }; 
+          }
+          const stats = leadersStats[row.teamLeader];
+          stats.totalRows++;
+          stats.sumProd += row.prodLiq || 0; // Somar produtividade
+
+          if (row.isOffender) {
+              stats.totalImpact++;
+              stats.offendersSet.add(row.nome); // Adicionar nome ao Set (unicos)
+          }
       }
+
       if (row.isOffender) {
         if (user.totalOffenses !== undefined) user.totalOffenses++;
-        if (row.teamLeader) leaders[row.teamLeader].totalImpact++;
       }
       user.history?.push(row);
     });
 
     const rankingUsers = Object.values(users).map(user => {
-      let maxStreak = 0;
-      let currentStreak = 0;
+      let maxStreak = 0; let currentStreak = 0;
       user.history?.forEach(row => {
         if (row.isOffender) currentStreak++;
-        else {
-          if (currentStreak > maxStreak) maxStreak = currentStreak;
-          currentStreak = 0;
-        }
+        else { if (currentStreak > maxStreak) maxStreak = currentStreak; currentStreak = 0; }
       });
       if (currentStreak > maxStreak) maxStreak = currentStreak;
-      
-      const totalOffenses = user.totalOffenses || 0;
-      const totalRows = user.totalRows || 0;
-
-      return { 
-        ...user, 
-        maxStreak, 
-        offenseRate: totalRows > 0 ? (totalOffenses / totalRows) * 100 : 0 
-      };
+      const totalOffenses = user.totalOffenses || 0; const totalRows = user.totalRows || 0;
+      return { ...user, maxStreak, offenseRate: totalRows > 0 ? (totalOffenses / totalRows) * 100 : 0 };
     }).filter(u => (u.totalOffenses || 0) > 0); 
 
     rankingUsers.sort((a, b) => {
@@ -373,55 +581,32 @@ const App = () => {
       return (b.totalOffenses || 0) - (a.totalOffenses || 0);
     });
 
-    const rankingLeaders: LeaderStat[] = Object.values(leaders)
-        .filter(l => l.totalImpact > 0)
-        .sort((a, b) => b.totalImpact - a.totalImpact)
-        .slice(0, 3)
-        .map(l => ({ name: l.name, count: 0, totalImpact: l.totalImpact }));
+    const rankingLeaders: LeaderStat[] = Object.entries(leadersStats)
+        .map(([name, stats]) => ({
+            name,
+            count: 0,
+            totalImpact: stats.totalImpact,
+            totalRows: stats.totalRows,
+            offensePercentage: stats.totalRows > 0 ? (stats.totalImpact / stats.totalRows) * 100 : 0,
+            uniqueOffenders: stats.offendersSet.size, // Contagem de pessoas unicas
+            avgProd: stats.totalRows > 0 ? (stats.sumProd / stats.totalRows) : 0 // Media de Produtividade
+        }))
+        .filter(l => (l.totalImpact || 0) > 0)
+        .sort((a, b) => (b.uniqueOffenders || 0) - (a.uniqueOffenders || 0));
 
-    setPerfResults(rankingUsers);
-    setPerfLeaders(rankingLeaders);
+    setPerfResults(rankingUsers); setPerfLeaders(rankingLeaders);
   };
 
   const reset = () => {
-    setFileData(null);
-    setFileName('');
-    setPerfResults(null);
-    setSetupResults(null);
-    setPerfLeaders([]);
-    setPerfIndirects([]);
-    setGranularity(null);
-    setDebugMode(false);
-    setPerfViewMode('performance');
-    setSetupViewMode('fast_start');
-    setAppMode(null); 
+    setFileData(null); setFileName(''); setPerfResults(null); setSetupResults(null); setLunchResults(null);
+    setPerfLeaders([]); setPerfIndirects([]); setGranularity(null); setDebugMode(false);
+    setSelectedLeader('Todos'); setSelectedCollaborator('Todos');
+    setPerfViewMode('performance'); setSetupViewMode('fast_start'); setLunchViewMode('catraca'); setAppMode(null); 
   };
-
-  const softReset = () => {
-      setFileData(null);
-      setFileName('');
-      setPerfResults(null);
-      setSetupResults(null);
-  }
+  const softReset = () => { setFileData(null); setFileName(''); setPerfResults(null); setSetupResults(null); setLunchResults(null); setSelectedLeader('Todos'); setSelectedCollaborator('Todos'); }
+  const GlobalStyle = () => ( <style>{` html, body { margin: 0; padding: 0; width: 100%; height: 100%; background-color: #f8fafc; } #root { width: 100%; height: 100%; } `}</style> );
 
   // --- RENDER ---
-
-  // NOTE: Added global style to prevent black background issues on body
-  const GlobalStyle = () => (
-    <style>{`
-      html, body {
-        margin: 0;
-        padding: 0;
-        width: 100%;
-        height: 100%;
-        background-color: #f8fafc; /* slate-50 */
-      }
-      #root {
-        width: 100%;
-        height: 100%;
-      }
-    `}</style>
-  );
 
   if (!appMode) {
       return (
@@ -433,33 +618,26 @@ const App = () => {
                     <p className="text-slate-500">Selecione o indicador que deseja analisar hoje</p>
                 </div>
                 
-                <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-                    <button 
-                        onClick={() => setAppMode('performance')}
-                        className="bg-white p-8 rounded-2xl shadow-sm border-2 border-transparent hover:border-blue-500 hover:shadow-xl transition-all text-left group"
-                    >
-                        <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center text-blue-600 mb-6 group-hover:scale-110 transition-transform">
-                            <BarChart2 size={32} />
-                        </div>
-                        <h2 className="text-2xl font-bold text-slate-800 mb-2">Performance & Produtividade</h2>
-                        <p className="text-slate-500 mb-6">
-                            Analise meta vs realizado, identifique ofensores recorrentes (horas/dias) e valide indiretos.
-                        </p>
-                        <span className="text-blue-600 font-bold flex items-center gap-2">Acessar Painel <ArrowRight size={16}/></span>
+                <div className="grid md:grid-cols-3 gap-6 max-w-6xl mx-auto">
+                    <button onClick={() => setAppMode('performance')} className="bg-white p-6 rounded-2xl shadow-sm border-2 border-transparent hover:border-blue-500 hover:shadow-xl transition-all text-left group">
+                        <div className="w-14 h-14 bg-blue-100 rounded-2xl flex items-center justify-center text-blue-600 mb-4 group-hover:scale-110 transition-transform"><BarChart2 size={28} /></div>
+                        <h2 className="text-xl font-bold text-slate-800 mb-2">Performance</h2>
+                        <p className="text-slate-500 text-sm mb-4">Meta vs Realizado, gargalos e indiretos.</p>
+                        <span className="text-blue-600 font-bold flex items-center gap-2 text-sm">Acessar <ArrowRight size={14}/></span>
                     </button>
 
-                    <button 
-                        onClick={() => setAppMode('setup')}
-                        className="bg-white p-8 rounded-2xl shadow-sm border-2 border-transparent hover:border-purple-500 hover:shadow-xl transition-all text-left group"
-                    >
-                        <div className="w-16 h-16 bg-purple-100 rounded-2xl flex items-center justify-center text-purple-600 mb-6 group-hover:scale-110 transition-transform">
-                            <Timer size={32} />
-                        </div>
-                        <h2 className="text-2xl font-bold text-slate-800 mb-2">Setup Time (Pontualidade)</h2>
-                        <p className="text-slate-500 mb-6">
-                            Analise indicadores de <strong>Fast Start</strong> (atraso no início) e <strong>Strong Finish</strong> (saída antecipada).
-                        </p>
-                        <span className="text-purple-600 font-bold flex items-center gap-2">Acessar Painel <ArrowRight size={16}/></span>
+                    <button onClick={() => setAppMode('setup')} className="bg-white p-6 rounded-2xl shadow-sm border-2 border-transparent hover:border-purple-500 hover:shadow-xl transition-all text-left group">
+                        <div className="w-14 h-14 bg-purple-100 rounded-2xl flex items-center justify-center text-purple-600 mb-4 group-hover:scale-110 transition-transform"><Timer size={28} /></div>
+                        <h2 className="text-xl font-bold text-slate-800 mb-2">Setup Time</h2>
+                        <p className="text-slate-500 text-sm mb-4">Fast Start e Strong Finish (Pontualidade).</p>
+                        <span className="text-purple-600 font-bold flex items-center gap-2 text-sm">Acessar <ArrowRight size={14}/></span>
+                    </button>
+
+                    <button onClick={() => setAppMode('lunch')} className="bg-white p-6 rounded-2xl shadow-sm border-2 border-transparent hover:border-orange-500 hover:shadow-xl transition-all text-left group">
+                        <div className="w-14 h-14 bg-orange-100 rounded-2xl flex items-center justify-center text-orange-600 mb-4 group-hover:scale-110 transition-transform"><Coffee size={28} /></div>
+                        <h2 className="text-xl font-bold text-slate-800 mb-2">Intervalo & Catraca</h2>
+                        <p className="text-slate-500 text-sm mb-4">Tempo excedido de pausa e atraso no retorno.</p>
+                        <span className="text-orange-600 font-bold flex items-center gap-2 text-sm">Acessar <ArrowRight size={14}/></span>
                     </button>
                 </div>
             </div>
@@ -467,108 +645,99 @@ const App = () => {
       );
   }
 
-  // 2. MAIN APP CONTAINER
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8">
       <GlobalStyle />
       <div className="w-full">
         
         {/* Header */}
-        <header className="mb-8 border-b border-slate-200 pb-4 flex justify-between items-center w-full">
+        <header className="mb-8 border-b border-slate-200 pb-4 flex flex-col md:flex-row justify-between items-center w-full gap-4">
           <div>
             <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
-                {appMode === 'performance' ? <BarChart2 className="text-blue-600" /> : <Timer className="text-purple-600" />}
-                {appMode === 'performance' ? 'Performance & Produtividade' : 'Setup Time (Pontualidade)'}
+                {appMode === 'performance' ? <BarChart2 className="text-blue-600" /> : appMode === 'setup' ? <Timer className="text-purple-600" /> : <Coffee className="text-orange-600" />}
+                {appMode === 'performance' ? 'Performance' : appMode === 'setup' ? 'Setup Time' : 'Intervalo & Catraca'}
             </h1>
             <p className="text-slate-500 mt-1 text-sm">
-                {appMode === 'performance' 
-                    ? 'Identifique gargalos de meta e indiretos.' 
-                    : 'Analise Fast Start (>15min) e Strong Finish.'}
+                {appMode === 'performance' ? 'Gargalos de meta e indiretos.' : appMode === 'setup' ? 'Fast Start e Strong Finish.' : 'Controle de pausa e retorno operacional.'}
             </p>
           </div>
-          <button onClick={reset} className="text-slate-500 hover:text-slate-800 font-medium text-sm flex items-center gap-1">
-              <Settings size={14} /> Trocar Painel
-          </button>
+          
+          <div className="flex gap-4 items-center">
+             {/* --- FILTROS GLOBAIS --- */}
+             {fileData && (
+                <div className="flex gap-2 items-center bg-white border border-slate-200 p-1 rounded-lg shadow-sm">
+                    <div className="flex items-center px-2 text-slate-400"><Filter size={16}/></div>
+                    <select 
+                        value={selectedLeader} 
+                        onChange={(e) => { setSelectedLeader(e.target.value); setSelectedCollaborator('Todos'); }}
+                        className="bg-transparent text-sm p-2 outline-none border-r border-slate-100 min-w-[150px]"
+                    >
+                        <option value="Todos">Todos os Leaders</option>
+                        {availableLeaders.map(l => <option key={l} value={l}>{l}</option>)}
+                    </select>
+                    <select 
+                        value={selectedCollaborator} 
+                        onChange={(e) => setSelectedCollaborator(e.target.value)}
+                        className="bg-transparent text-sm p-2 outline-none min-w-[150px]"
+                    >
+                        <option value="Todos">Todos Colaboradores</option>
+                        {availableCollaborators.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                </div>
+             )}
+
+             <button onClick={reset} className="text-slate-500 hover:text-slate-800 font-medium text-sm flex items-center gap-1 bg-slate-100 px-3 py-2 rounded-lg">
+                <Settings size={14} /> Sair
+             </button>
+          </div>
         </header>
 
         {/* --- UPLOAD SECTION --- */}
         {!fileData && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center w-full">
-            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 ${appMode === 'performance' ? 'bg-blue-50 text-blue-500' : 'bg-purple-50 text-purple-500'}`}>
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center max-w-4xl mx-auto">
+            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 ${appMode === 'performance' ? 'bg-blue-50 text-blue-500' : appMode === 'setup' ? 'bg-purple-50 text-purple-500' : 'bg-orange-50 text-orange-500'}`}>
               <Upload className="w-10 h-10" />
             </div>
             <h2 className="text-xl font-semibold mb-2">
-                Upload Base de {appMode === 'performance' ? 'Performance' : 'Setup Time'}
+                Upload Base de {appMode === 'performance' ? 'Performance' : appMode === 'setup' ? 'Setup Time' : 'Intervalo'}
             </h2>
             <p className="text-slate-400 mb-6 max-w-lg mx-auto text-sm">
               {appMode === 'performance' ? (
                   <>Colunas: Período, Nome, Leader, Meta, Prod, Tempo, Unidades.</>
-              ) : (
+              ) : appMode === 'setup' ? (
                   <>Colunas: Nome, Leader, Clock In, 1º Bip, Tempo Entrada, Último Bip, Target Saída, Clock Out.</>
+              ) : (
+                  <>Colunas: TL, Representante, Tempo Catraca, Saída/Retorno Catraca, Retorno BIP.</>
               )}
             </p>
             <input type="file" accept=".csv,.txt" onChange={handleFileUpload} className="hidden" id="csvUpload"/>
-            <label htmlFor="csvUpload" className={`inline-flex items-center gap-2 px-6 py-3 text-white font-medium rounded-lg cursor-pointer transition-colors ${appMode === 'performance' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-purple-600 hover:bg-purple-700'}`}>
+            <label htmlFor="csvUpload" className={`inline-flex items-center gap-2 px-6 py-3 text-white font-medium rounded-lg cursor-pointer transition-colors ${appMode === 'performance' ? 'bg-blue-600 hover:bg-blue-700' : appMode === 'setup' ? 'bg-purple-600 hover:bg-purple-700' : 'bg-orange-600 hover:bg-orange-700'}`}>
               <FileText size={20} /> Selecionar CSV
             </label>
             {processing && <p className="mt-4 text-slate-400 animate-pulse">Processando dados...</p>}
           </div>
         )}
 
-        {/* --- PERFORMANCE ANALYZER DASHBOARD --- */}
+        {/* --- PERFORMANCE DASHBOARD --- */}
         {fileData && appMode === 'performance' && (
             <div className="space-y-6 w-full">
                 {!perfResults ? (
-                    /* Config Screen Performance */
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 w-full">
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 max-w-4xl mx-auto">
                         <div className="flex items-center justify-between mb-8">
                             <h2 className="text-xl font-bold flex items-center gap-2"><CheckCircle className="text-green-500"/> Arquivo Carregado</h2>
                             <div className="flex gap-4">
-                                <button 
-                                  onClick={() => setDebugMode(!debugMode)}
-                                  className="flex items-center gap-2 text-slate-500 hover:text-blue-600 text-sm"
-                                >
-                                  <Eye size={16} />
-                                  {debugMode ? 'Ocultar Diagnóstico' : 'Ver Diagnóstico'}
-                                </button>
+                                <button onClick={() => setDebugMode(!debugMode)} className="flex items-center gap-2 text-slate-500 hover:text-blue-600 text-sm"><Eye size={16} /> Diag</button>
                                 <button onClick={softReset} className="text-red-500 text-sm">Cancelar</button>
                             </div>
                         </div>
-
-                        {/* DEBUG TABLE */}
                         {debugMode && (
                           <div className="mb-8 p-4 bg-slate-100 rounded-lg overflow-x-auto">
-                            <h4 className="font-bold text-sm mb-2 text-slate-700">Diagnóstico (Primeiras 3 linhas):</h4>
                             <table className="w-full text-xs text-left bg-white rounded border border-slate-300">
-                              <thead className="bg-slate-200">
-                                <tr>
-                                  <th className="p-2 border">Colab</th>
-                                  <th className="p-2 border">Leader</th>
-                                  <th className="p-2 border">Meta</th>
-                                  <th className="p-2 border">Tempo</th>
-                                  <th className="p-2 border">Status</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {fileData.slice(0, 3).map((row: PerformanceRow, i) => (
-                                  <tr key={i} className="border-b">
-                                    <td className="p-2 border">{row.nome}</td>
-                                    <td className="p-2 border">{row.teamLeader}</td>
-                                    <td className="p-2 border">{row.meta}</td>
-                                    <td className="p-2 border">{row.tempoProcRaw}</td>
-                                    <td className="p-2 border font-bold">
-                                      {row.isIndirect ? 
-                                        <span className="text-orange-500">INDIRETO</span> : 
-                                        (row.isOffender ? <span className="text-red-600">OFENSOR</span> : <span className="text-green-600">OK</span>)
-                                      }
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
+                              <thead className="bg-slate-200"><tr><th className="p-2 border">Colab</th><th className="p-2 border">Leader</th><th className="p-2 border">Meta</th><th className="p-2 border">Status</th></tr></thead>
+                              <tbody>{fileData.slice(0, 3).map((row: PerformanceRow, i) => (<tr key={i}><td className="p-2 border">{row.nome}</td><td className="p-2 border">{row.teamLeader}</td><td className="p-2 border">{row.meta}</td><td className="p-2 border">{row.isOffender ? 'NOK' : 'OK'}</td></tr>))}</tbody>
                             </table>
                           </div>
                         )}
-
                         <div className="grid md:grid-cols-2 gap-4 max-w-2xl mx-auto">
                             <button onClick={() => runPerformanceAnalysis('hourly')} className="p-6 border-2 border-slate-100 hover:border-blue-500 rounded-xl text-left hover:bg-blue-50 transition-all">
                                 <span className="font-bold block text-lg mb-1 text-blue-900">Base em Horas</span>
@@ -581,13 +750,14 @@ const App = () => {
                         </div>
                     </div>
                 ) : (
-                    /* Results Performance */
                     <>
-                        <div className="flex border-b border-slate-200">
+                        <div className="flex border-b border-slate-200 gap-2">
                             <button onClick={() => setPerfViewMode('performance')} className={`px-6 py-3 font-medium text-sm border-b-2 ${perfViewMode === 'performance' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}>Performance</button>
+                            <button onClick={() => setPerfViewMode('leaders')} className={`px-6 py-3 font-medium text-sm border-b-2 flex items-center gap-2 ${perfViewMode === 'leaders' ? 'border-purple-500 text-purple-600' : 'border-transparent text-slate-500'}`}><BarChart size={16}/> Visão de Líderes</button>
                             <button onClick={() => setPerfViewMode('indirects')} className={`px-6 py-3 font-medium text-sm border-b-2 ${perfViewMode === 'indirects' ? 'border-orange-500 text-orange-600' : 'border-transparent text-slate-500'}`}>Indiretos ({perfIndirects.length})</button>
                         </div>
-
+                        
+                        {/* VIEW: PERFORMANCE (INDIVIDUAL) */}
                         {perfViewMode === 'performance' && (
                             <>
                                 <div className="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200 w-full">
@@ -596,45 +766,105 @@ const App = () => {
                                 </div>
                                 {perfLeaders.length > 0 && (
                                     <div className="bg-slate-800 text-white rounded-xl p-6 shadow-lg w-full">
-                                        <h3 className="text-sm font-bold uppercase text-slate-400 mb-4 flex items-center gap-2"><ShieldAlert size={16}/> Top Team Leaders Impactados</h3>
-                                        <div className="grid md:grid-cols-3 gap-4">
-                                            {perfLeaders.map((l, i) => (
-                                                <div key={i} className="bg-slate-700/50 p-3 rounded border border-slate-600 flex justify-between">
-                                                    <span className="font-medium truncate pr-2">{l.name}</span>
-                                                    <span className="bg-red-500 text-xs font-bold px-2 py-1 rounded">{l.totalImpact}</span>
-                                                </div>
-                                            ))}
-                                        </div>
+                                        <h3 className="text-sm font-bold uppercase text-slate-400 mb-4 flex items-center gap-2"><ShieldAlert size={16}/> Top Team Leaders (Impacto Total)</h3>
+                                        <div className="grid md:grid-cols-3 gap-4">{perfLeaders.slice(0,3).map((l, i) => (<div key={i} className="bg-slate-700/50 p-3 rounded border border-slate-600 flex justify-between"><span className="font-medium truncate pr-2">{l.name}</span><span className="bg-red-500 text-xs font-bold px-2 py-1 rounded">{l.totalImpact}</span></div>))}</div>
                                     </div>
                                 )}
                                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
                                     <table className="w-full text-left text-sm">
+                                        <thead className="bg-slate-100 text-slate-600"><tr><th className="px-6 py-3">Colaborador</th><th className="px-6 py-3">Leader</th><th className="px-6 py-3 text-center">Maior Seq.</th><th className="px-6 py-3 text-center">Falhas</th></tr></thead>
+                                        <tbody className="divide-y divide-slate-100">{applyFilters(perfResults).map((u, i) => (<tr key={i} className="hover:bg-slate-50"><td className="px-6 py-4 font-medium">{u.nome}</td><td className="px-6 py-4 text-slate-500">{u.teamLeader}</td><td className="px-6 py-4 text-center"><span className="bg-red-100 text-red-700 px-2 py-1 rounded font-bold">{u.maxStreak}</span></td><td className="px-6 py-4 text-center font-bold">{u.totalOffenses}</td></tr>))}</tbody>
+                                    </table>
+                                </div>
+                            </>
+                        )}
+
+                        {/* VIEW: LEADERS (ANALYSIS) */}
+                        {perfViewMode === 'leaders' && (
+                            <div className="space-y-6">
+                                <div className="grid md:grid-cols-2 gap-6 w-full">
+                                    {/* Chart 1: Qtd Absoluta */}
+                                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                        <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><BarChart2 size={20} className="text-blue-500"/> Ranking por Qtd. Ofensores</h3>
+                                        <div className="space-y-4">
+                                            {perfLeaders.slice(0, 5).map((l, i) => {
+                                                const maxImpact = perfLeaders[0]?.totalImpact || 1;
+                                                const percent = ((l.totalImpact || 0) / maxImpact) * 100;
+                                                return (
+                                                    <div key={i}>
+                                                        <div className="flex justify-between text-xs mb-1">
+                                                            <span className="font-medium text-slate-700 truncate w-40">{l.name}</span>
+                                                            <span className="font-bold text-slate-900">{l.totalImpact}</span>
+                                                        </div>
+                                                        <div className="w-full bg-slate-100 rounded-full h-2.5">
+                                                            <div className="bg-blue-500 h-2.5 rounded-full transition-all duration-500" style={{width: `${percent}%`}}></div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    {/* Chart 2: Percentual */}
+                                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                        <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Percent size={20} className="text-purple-500"/> Ranking por % do Time</h3>
+                                        <div className="space-y-4">
+                                            {[...perfLeaders].sort((a,b) => (b.offensePercentage || 0) - (a.offensePercentage || 0)).slice(0, 5).map((l, i) => {
+                                                return (
+                                                    <div key={i}>
+                                                        <div className="flex justify-between text-xs mb-1">
+                                                            <span className="font-medium text-slate-700 truncate w-40">{l.name}</span>
+                                                            <span className="font-bold text-slate-900">{(l.offensePercentage || 0).toFixed(1)}%</span>
+                                                        </div>
+                                                        <div className="w-full bg-slate-100 rounded-full h-2.5">
+                                                            <div className="bg-purple-500 h-2.5 rounded-full transition-all duration-500" style={{width: `${l.offensePercentage}%`}}></div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
+                                    <div className="p-4 border-b border-slate-100 bg-slate-50 font-bold text-slate-700 flex justify-between">
+                                        <span>Detalhamento dos Líderes</span>
+                                        <span className="text-xs text-slate-400 font-normal self-center">Ordenado por Pessoas Ofensoras</span>
+                                    </div>
+                                    <table className="w-full text-left text-sm">
                                         <thead className="bg-slate-100 text-slate-600">
-                                            <tr><th className="px-6 py-3">Colaborador</th><th className="px-6 py-3">Leader</th><th className="px-6 py-3 text-center">Maior Seq.</th><th className="px-6 py-3 text-center">Falhas</th></tr>
+                                            <tr>
+                                                <th className="px-6 py-3">Team Leader</th>
+                                                <th className="px-6 py-3 text-center">Tamanho Time</th>
+                                                <th className="px-6 py-3 text-center">Total de Falhas</th>
+                                                <th className="px-6 py-3 text-center bg-blue-50 text-blue-800">Pessoas Ofensoras</th>
+                                                <th className="px-6 py-3 text-center bg-green-50 text-green-800">Média Prod.</th>
+                                                <th className="px-6 py-3 text-center">% Impacto</th>
+                                            </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
-                                            {perfResults.map((u, i) => (
+                                            {perfLeaders.map((l, i) => (
                                                 <tr key={i} className="hover:bg-slate-50">
-                                                    <td className="px-6 py-4 font-medium">{u.nome}</td>
-                                                    <td className="px-6 py-4 text-slate-500">{u.teamLeader}</td>
-                                                    <td className="px-6 py-4 text-center"><span className="bg-red-100 text-red-700 px-2 py-1 rounded font-bold">{u.maxStreak}</span></td>
-                                                    <td className="px-6 py-4 text-center font-bold">{u.totalOffenses}</td>
+                                                    <td className="px-6 py-4 font-medium text-slate-800">{l.name}</td>
+                                                    <td className="px-6 py-4 text-center text-slate-500">{l.totalRows}</td>
+                                                    <td className="px-6 py-4 text-center font-bold text-slate-600">{l.totalImpact}</td>
+                                                    <td className="px-6 py-4 text-center font-bold text-blue-600 bg-blue-50/30">{l.uniqueOffenders}</td>
+                                                    <td className="px-6 py-4 text-center font-bold text-green-600 bg-green-50/30">{(l.avgProd || 0).toFixed(2)}</td>
+                                                    <td className="px-6 py-4 text-center font-bold text-slate-700">{(l.offensePercentage || 0).toFixed(1)}%</td>
                                                 </tr>
                                             ))}
                                         </tbody>
                                     </table>
                                 </div>
-                            </>
+                            </div>
                         )}
+
+                        {/* VIEW: INDIRECTS */}
                         {perfViewMode === 'indirects' && (
                             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
                                 <table className="w-full text-left text-sm">
                                     <thead className="bg-orange-50 text-orange-800"><tr><th className="px-6 py-3">Nome</th><th className="px-6 py-3">Leader</th><th className="px-6 py-3">Tempo</th><th className="px-6 py-3">Unidades</th></tr></thead>
-                                    <tbody className="divide-y divide-slate-100">
-                                        {perfIndirects.map((u, i) => (
-                                            <tr key={i}><td className="px-6 py-3">{u.nome}</td><td className="px-6 py-3">{u.teamLeader}</td><td className="px-6 py-3">{u.tempoProcRaw}</td><td className="px-6 py-3">{u.unidades}</td></tr>
-                                        ))}
-                                    </tbody>
+                                    <tbody className="divide-y divide-slate-100">{applyFilters(perfIndirects).map((u, i) => (<tr key={i}><td className="px-6 py-3">{u.nome}</td><td className="px-6 py-3">{u.teamLeader}</td><td className="px-6 py-3">{u.tempoProcRaw}</td><td className="px-6 py-3">{u.unidades}</td></tr>))}</tbody>
                                 </table>
                             </div>
                         )}
@@ -643,134 +873,232 @@ const App = () => {
             </div>
         )}
 
-        {/* --- SETUP TIME ANALYZER DASHBOARD --- */}
+        {/* --- SETUP DASHBOARD --- */}
         {fileData && appMode === 'setup' && setupResults && (
             <div className="space-y-6 w-full">
-                
-                {/* Control Header */}
                 <div className="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200 shadow-sm w-full">
-                    <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-700">Arquivo:</span>
-                        <span className="text-slate-500 text-sm">{fileName}</span>
-                    </div>
+                    <div className="flex items-center gap-2"><span className="font-bold text-slate-700">Arquivo:</span><span className="text-slate-500 text-sm">{fileName}</span></div>
                     <button onClick={softReset} className="text-red-500 hover:text-red-700 text-sm font-medium">Trocar Arquivo</button>
                 </div>
-
-                {/* Leader Stats (Shared) */}
-                {setupResults.leaders.length > 0 && (
-                    <div className="bg-purple-900 text-white rounded-xl p-6 shadow-lg w-full">
-                         <h3 className="text-sm font-bold uppercase text-purple-200 mb-4 flex items-center gap-2">
-                            <Users size={16}/> Top Leaders com Problemas de Pontualidade
-                        </h3>
-                        <div className="grid md:grid-cols-3 gap-4">
-                            {setupResults.leaders.map((l, i) => (
-                                <div key={i} className="bg-purple-800/50 p-4 rounded-lg border border-purple-700 flex justify-between items-center">
-                                    <div className="flex items-center gap-3">
-                                        <span className="text-xl font-bold text-purple-300">#{i+1}</span>
-                                        <span className="font-medium truncate max-w-[120px]" title={l.name}>{l.name}</span>
-                                    </div>
-                                    <span className="bg-white text-purple-900 text-xs font-bold px-3 py-1 rounded-full">
-                                        {l.count} ofensores
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Tabs */}
+                
                 <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 w-full">
-                    <button 
-                        onClick={() => setSetupViewMode('fast_start')}
-                        className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'fast_start' ? 'border-red-500 text-red-600 bg-red-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                    >
-                        <Timer size={18}/> Fast Start (Início)
-                        <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{setupResults.fastStart.length}</span>
-                    </button>
-                    <button 
-                        onClick={() => setSetupViewMode('strong_finish')}
-                        className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'strong_finish' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                    >
-                        <CheckCircle size={18}/> Strong Finish (Fim)
-                        <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{setupResults.strongFinish.length}</span>
-                    </button>
+                    <button onClick={() => setSetupViewMode('fast_start')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'fast_start' ? 'border-red-500 text-red-600 bg-red-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Timer size={18}/> Fast Start <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(setupResults.fastStart).length}</span></button>
+                    <button onClick={() => setSetupViewMode('strong_finish')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'strong_finish' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><CheckCircle size={18}/> Strong Finish <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(setupResults.strongFinish).length}</span></button>
+                    <button onClick={() => setSetupViewMode('leaders')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'leaders' ? 'border-purple-500 text-purple-600 bg-purple-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><BarChart size={18}/> Visão de Líderes</button>
                 </div>
 
-                {/* View: Fast Start */}
                 {setupViewMode === 'fast_start' && (
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
-                        <div className="p-4 bg-red-50 text-red-800 text-sm border-b border-red-100 flex items-center gap-2">
-                            <AlertTriangle size={16}/>
-                            Exibindo colaboradores com <strong>Tempo de Bip Entrada {'>'} 15:00</strong>
-                        </div>
+                        <div className="p-4 bg-red-50 text-red-800 text-sm border-b border-red-100 flex items-center gap-2"><AlertTriangle size={16}/> Colaboradores com <strong>Tempo de Bip Entrada {'>'} 15:00</strong></div>
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-100 text-slate-600">
-                                <tr>
-                                    <th className="px-6 py-3 font-semibold">Colaborador</th>
-                                    <th className="px-6 py-3 font-semibold">Leader</th>
-                                    <th className="px-6 py-3 font-semibold">Clock In</th>
-                                    <th className="px-6 py-3 font-semibold">Primeiro Bip</th>
-                                    <th className="px-6 py-3 font-semibold text-right">Tempo Bip Entrada</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {setupResults.fastStart.map((row, i) => (
-                                    <tr key={i} className="hover:bg-slate-50">
-                                        <td className="px-6 py-4 font-medium text-slate-800">{row.nome}</td>
-                                        <td className="px-6 py-4 text-slate-500">{row.teamLeader}</td>
-                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.clockIn}</td>
-                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.primeiroBip}</td>
-                                        <td className="px-6 py-4 text-right font-bold text-red-600 font-mono">{row.tempoBipEntrada}</td>
-                                    </tr>
-                                ))}
-                                {setupResults.fastStart.length === 0 && (
-                                    <tr><td colSpan={5} className="p-8 text-center text-slate-500">Nenhum ofensor de Fast Start encontrado!</td></tr>
-                                )}
-                            </tbody>
+                            <thead className="bg-slate-100 text-slate-600"><tr><th className="px-6 py-3">Colaborador</th><th className="px-6 py-3">Leader</th><th className="px-6 py-3">Clock In</th><th className="px-6 py-3">Primeiro Bip</th><th className="px-6 py-3 text-right">Tempo Bip Entrada</th></tr></thead>
+                            <tbody className="divide-y divide-slate-100">{applyFilters(setupResults.fastStart).map((row, i) => (<tr key={i} className="hover:bg-slate-50"><td className="px-6 py-4 font-medium">{row.nome}</td><td className="px-6 py-4 text-slate-500">{row.teamLeader}</td><td className="px-6 py-4 text-slate-500 text-xs font-mono">{row.clockIn}</td><td className="px-6 py-4 text-slate-500 text-xs font-mono">{row.primeiroBip}</td><td className="px-6 py-4 text-right font-bold text-red-600 font-mono">{row.tempoBipEntrada}</td></tr>))}</tbody>
                         </table>
                     </div>
                 )}
-
-                {/* View: Strong Finish */}
                 {setupViewMode === 'strong_finish' && (
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
-                        <div className="p-4 bg-blue-50 text-blue-800 text-sm border-b border-blue-100 flex items-center gap-2">
-                            <AlertTriangle size={16}/>
-                            Exibindo colaboradores que pararam <strong>antes da meta</strong> ou <strong>demoraram a sair</strong>.
+                        <div className="p-4 bg-blue-50 text-blue-800 text-sm border-b border-blue-100 flex items-center gap-2"><AlertTriangle size={16}/> Saída antecipada ou demorada.</div>
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-100 text-slate-600"><tr><th className="px-6 py-3">Colaborador</th><th className="px-6 py-3">Motivo</th><th className="px-6 py-3">Último Bip</th><th className="px-6 py-3">Target Saída</th><th className="px-6 py-3">Clock Out</th></tr></thead>
+                            <tbody className="divide-y divide-slate-100">{applyFilters(setupResults.strongFinish).map((row, i) => (<tr key={i} className="hover:bg-slate-50"><td className="px-6 py-4 font-medium">{row.nome}</td><td className="px-6 py-4"><span className={`text-xs px-2 py-1 rounded font-bold ${row.sfReason.includes('meta') ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{row.sfReason}</span></td><td className="px-6 py-4 text-slate-500 text-xs font-mono">{row.ultimoBipRaw}</td><td className="px-6 py-4 text-slate-500 text-xs font-mono">{row.targetSaidaRaw}</td><td className="px-6 py-4 text-slate-500 text-xs font-mono">{row.clockOutRaw}</td></tr>))}</tbody>
+                        </table>
+                    </div>
+                )}
+                {setupViewMode === 'leaders' && (
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
+                        <div className="p-4 bg-purple-50 text-purple-800 text-sm border-b border-purple-100 flex justify-between">
+                            <span className="font-bold flex items-center gap-2"><Users size={16}/> Análise de Setup por Líder</span>
+                            <span className="text-xs font-normal">Ordenado por Pessoas Ofensoras</span>
                         </div>
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-100 text-slate-600">
                                 <tr>
-                                    <th className="px-6 py-3 font-semibold">Colaborador</th>
-                                    <th className="px-6 py-3 font-semibold">Motivo</th>
-                                    <th className="px-6 py-3 font-semibold">Último Bip</th>
-                                    <th className="px-6 py-3 font-semibold">Target Saída</th>
-                                    <th className="px-6 py-3 font-semibold">Clock Out</th>
+                                    <th className="px-6 py-3">Team Leader</th>
+                                    <th className="px-6 py-3 text-center">Tamanho Time</th>
+                                    <th className="px-6 py-3 text-center">Total Falhas</th>
+                                    <th className="px-6 py-3 text-center bg-purple-50 text-purple-900">Pessoas Ofensoras</th>
+                                    <th className="px-6 py-3 text-center bg-slate-200 text-slate-700">Média 1º Bip</th>
+                                    <th className="px-6 py-3 text-center bg-slate-200 text-slate-700">Média Desvio Saída</th>
+                                    <th className="px-6 py-3 text-center">% Impacto</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                                {setupResults.strongFinish.map((row, i) => (
+                                {setupResults.leaders.map((l, i) => (
                                     <tr key={i} className="hover:bg-slate-50">
-                                        <td className="px-6 py-4 font-medium text-slate-800">{row.nome}</td>
-                                        <td className="px-6 py-4">
-                                            <span className={`text-xs px-2 py-1 rounded font-bold ${row.sfReason.includes('meta') ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
-                                                {row.sfReason}
-                                            </span>
-                                        </td>
-                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.ultimoBipRaw}</td>
-                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.targetSaidaRaw}</td>
-                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.clockOutRaw}</td>
+                                        <td className="px-6 py-4 font-medium text-slate-800">{l.name}</td>
+                                        <td className="px-6 py-4 text-center text-slate-500">{l.totalRows}</td>
+                                        <td className="px-6 py-4 text-center font-bold text-slate-600">{l.totalImpact}</td>
+                                        <td className="px-6 py-4 text-center font-bold text-purple-700 bg-purple-50/50">{l.uniqueOffenders}</td>
+                                        <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(l.avgFirstBip || 0)}</td>
+                                        <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(l.avgExitDiff || 0)}</td>
+                                        <td className="px-6 py-4 text-center font-bold text-slate-700">{(l.offensePercentage || 0).toFixed(1)}%</td>
                                     </tr>
                                 ))}
-                                {setupResults.strongFinish.length === 0 && (
-                                    <tr><td colSpan={5} className="p-8 text-center text-slate-500">Nenhum ofensor de Strong Finish encontrado!</td></tr>
-                                )}
                             </tbody>
                         </table>
                     </div>
                 )}
             </div>
         )}
+
+        {/* --- LUNCH (INTERVALO) DASHBOARD (NOVO) --- */}
+        {fileData && appMode === 'lunch' && lunchResults && (
+            <div className="space-y-6 w-full">
+                {/* Control Header */}
+                <div className="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200 shadow-sm w-full">
+                    <div className="flex items-center gap-2"><span className="font-bold text-slate-700">Arquivo:</span><span className="text-slate-500 text-sm">{fileName}</span></div>
+                    <button onClick={softReset} className="text-red-500 hover:text-red-700 text-sm font-medium">Trocar Arquivo</button>
+                </div>
+
+                {/* Tabs */}
+                <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 w-full">
+                    <button onClick={() => setLunchViewMode('catraca')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'catraca' ? 'border-red-500 text-red-600 bg-red-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                        <Clock size={18}/> Excesso Catraca <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.catraca).length}</span>
+                    </button>
+                    <button onClick={() => setLunchViewMode('retorno')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'retorno' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                        <Timer size={18}/> Atraso Retorno <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.retorno).length}</span>
+                    </button>
+                    <button onClick={() => setLunchViewMode('total')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'total' ? 'border-yellow-500 text-yellow-600 bg-yellow-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                        <TrendingUp size={18}/> Tempo Total {'>'} 1h10 <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.totalInterval).length}</span>
+                    </button>
+                    <button onClick={() => setLunchViewMode('leaders')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'leaders' ? 'border-orange-500 text-orange-600 bg-orange-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><BarChart size={18}/> Visão de Líderes</button>
+                </div>
+
+                {/* View: Catraca */}
+                {lunchViewMode === 'catraca' && (
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
+                        <div className="p-4 bg-red-50 text-red-800 text-sm border-b border-red-100 flex items-center gap-2">
+                            <AlertTriangle size={16}/> Colaboradores com <strong>Tempo de Catraca {'>'} 01:00:30</strong>
+                        </div>
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                    <th className="px-6 py-3 font-semibold">Colaborador</th>
+                                    <th className="px-6 py-3 font-semibold">Leader</th>
+                                    <th className="px-6 py-3 font-semibold">Saída Catraca</th>
+                                    <th className="px-6 py-3 font-semibold">Retorno Catraca</th>
+                                    <th className="px-6 py-3 font-semibold text-right">Tempo Total</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {applyFilters(lunchResults.catraca).map((row, i) => (
+                                    <tr key={i} className="hover:bg-slate-50">
+                                        <td className="px-6 py-4 font-medium text-slate-800">{row.nome}</td>
+                                        <td className="px-6 py-4 text-slate-500">{row.teamLeader}</td>
+                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.saidaCatraca}</td>
+                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.retornoCatraca}</td>
+                                        <td className="px-6 py-4 text-right font-bold text-red-600 font-mono">{row.tempoCatracaRaw}</td>
+                                    </tr>
+                                ))}
+                                {applyFilters(lunchResults.catraca).length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-500">Nenhum ofensor de Catraca encontrado!</td></tr>}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {/* View: Retorno */}
+                {lunchViewMode === 'retorno' && (
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
+                        <div className="p-4 bg-blue-50 text-blue-800 text-sm border-b border-blue-100 flex items-center gap-2">
+                            <AlertTriangle size={16}/> Atraso entre <strong>Catraca e Operação (BIP) {'>'} 10:00</strong>
+                        </div>
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                    <th className="px-6 py-3 font-semibold">Colaborador</th>
+                                    <th className="px-6 py-3 font-semibold">Leader</th>
+                                    <th className="px-6 py-3 font-semibold">Retorno Catraca</th>
+                                    <th className="px-6 py-3 font-semibold">Retorno BIP</th>
+                                    <th className="px-6 py-3 font-semibold text-right">Diferença (Atraso)</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {applyFilters(lunchResults.retorno).map((row, i) => (
+                                    <tr key={i} className="hover:bg-slate-50">
+                                        <td className="px-6 py-4 font-medium text-slate-800">{row.nome}</td>
+                                        <td className="px-6 py-4 text-slate-500">{row.teamLeader}</td>
+                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.retornoCatraca}</td>
+                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.retornoBip}</td>
+                                        <td className="px-6 py-4 text-right font-bold text-orange-600 font-mono">{row.diffRetornoFormatted}</td>
+                                    </tr>
+                                ))}
+                                {applyFilters(lunchResults.retorno).length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-500">Nenhum atraso de retorno encontrado!</td></tr>}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {/* View: Total Interval (Nova) */}
+                {lunchViewMode === 'total' && (
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
+                        <div className="p-4 bg-yellow-50 text-yellow-800 text-sm border-b border-yellow-100 flex items-center gap-2">
+                            <AlertTriangle size={16}/> Tempo Total (Catraca + Retorno) <strong>{'>'} 01:10:00</strong>
+                        </div>
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                    <th className="px-6 py-3 font-semibold">Colaborador</th>
+                                    <th className="px-6 py-3 font-semibold">Leader</th>
+                                    <th className="px-6 py-3 font-semibold">Tempo Catraca</th>
+                                    <th className="px-6 py-3 font-semibold">Tempo Retorno</th>
+                                    <th className="px-6 py-3 font-semibold text-right">Soma Total</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {applyFilters(lunchResults.totalInterval).map((row, i) => (
+                                    <tr key={i} className="hover:bg-slate-50">
+                                        <td className="px-6 py-4 font-medium text-slate-800">{row.nome}</td>
+                                        <td className="px-6 py-4 text-slate-500">{row.teamLeader}</td>
+                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.tempoCatracaRaw}</td>
+                                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{row.diffRetornoFormatted}</td>
+                                        <td className="px-6 py-4 text-right font-bold text-yellow-600 font-mono">{row.totalIntervalFormatted}</td>
+                                    </tr>
+                                ))}
+                                {applyFilters(lunchResults.totalInterval).length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-500">Nenhum excesso de tempo total encontrado!</td></tr>}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {/* View: Leaders */}
+                {lunchViewMode === 'leaders' && (
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
+                        <div className="p-4 bg-orange-50 text-orange-800 text-sm border-b border-orange-100 flex justify-between">
+                            <span className="font-bold flex items-center gap-2"><Users size={16}/> Análise de Intervalo por Líder</span>
+                            <span className="text-xs font-normal">Ordenado por Pessoas Ofensoras</span>
+                        </div>
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                    <th className="px-6 py-3">Team Leader</th>
+                                    <th className="px-6 py-3 text-center">Tamanho Time</th>
+                                    <th className="px-6 py-3 text-center">Total Falhas</th>
+                                    <th className="px-6 py-3 text-center bg-orange-100 text-orange-900">Pessoas Ofensoras</th>
+                                    <th className="px-6 py-3 text-center bg-slate-200 text-slate-700">Média Catraca</th>
+                                    <th className="px-6 py-3 text-center bg-slate-200 text-slate-700">Média Retorno</th>
+                                    <th className="px-6 py-3 text-center">% Impacto</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {lunchResults.leaders.map((l, i) => (
+                                    <tr key={i} className="hover:bg-slate-50">
+                                        <td className="px-6 py-4 font-medium text-slate-800">{l.name}</td>
+                                        <td className="px-6 py-4 text-center text-slate-500">{l.totalRows}</td>
+                                        <td className="px-6 py-4 text-center font-bold text-slate-600">{l.totalImpact}</td>
+                                        <td className="px-6 py-4 text-center font-bold text-orange-700 bg-orange-50/50">{l.uniqueOffenders}</td>
+                                        <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(l.avgCatraca || 0)}</td>
+                                        <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(l.avgRetorno || 0)}</td>
+                                        <td className="px-6 py-4 text-center font-bold text-slate-700">{(l.offensePercentage || 0).toFixed(1)}%</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        )}
+
       </div>
     </div>
   );

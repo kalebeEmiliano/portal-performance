@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent, useMemo, useEffect, useRef } from 'react';
-import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Users, RefreshCcw, Eye, ShieldAlert, Timer, ArrowRight, Settings, Coffee, Clock, Filter, BarChart, Percent, TrendingUp, Calendar, Image as ImageIcon } from 'lucide-react';
+import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Users, RefreshCcw, Eye, ShieldAlert, Timer, ArrowRight, Settings, Coffee, Clock, Filter, BarChart, Percent, TrendingUp, Calendar, Image as ImageIcon, ArrowUp, ArrowDown, User } from 'lucide-react';
 
 // --- INTERFACES (TIPAGENS) ---
 
@@ -74,11 +74,35 @@ interface LeaderStat {
   avgRetorno?: number;     
 }
 
+// Interface para Visão Detalhada de Colaborador (Médias)
+interface CollaboratorStat {
+    nome: string;
+    teamLeader: string;
+    count: number; // Quantas vezes apareceu na base filtrada
+    avgProd?: number;
+    avgFirstBip?: number;
+    avgExitDiff?: number;
+    avgCatraca?: number;
+    avgRetorno?: number;
+}
+
+// Stats globais para exibição no topo
+interface GlobalStats {
+  avgProd?: number;
+  avgFirstBip?: number;
+  avgExitDiff?: number;
+  avgCatraca?: number;
+  avgRetorno?: number;
+  totalCollaborators: number;
+}
+
 interface SetupResults {
   fastStart: SetupRow[];
   strongFinish: SetupRow[];
   leaders: LeaderStat[];
+  collaborators: CollaboratorStat[]; // Nova lista de médias por colaborador
   allRows: SetupRow[];
+  globalStats: GlobalStats;
 }
 
 interface LunchResults {
@@ -86,8 +110,35 @@ interface LunchResults {
   retorno: LunchRow[];
   totalInterval: LunchRow[]; 
   leaders: LeaderStat[];
+  collaborators: CollaboratorStat[]; // Nova lista de médias por colaborador
   allRows: LunchRow[];
+  globalStats: GlobalStats;
 }
+
+interface PerformanceResults {
+    individual: PerformanceRow[];
+    leaders: LeaderStat[];
+    collaborators: CollaboratorStat[]; // Nova lista de médias por colaborador
+    indirects: PerformanceRow[];
+    globalStats: GlobalStats;
+}
+
+// --- SORTABLE TABLE COMPONENT ---
+const SortableHeader = ({ label, sortKey, currentSort, onSort, className = "" }: { label: string, sortKey: string, currentSort: { key: string, direction: 'asc' | 'desc' }, onSort: (key: string) => void, className?: string }) => {
+    return (
+        <th 
+            className={`px-6 py-3 cursor-pointer hover:bg-slate-200 transition-colors select-none ${className}`}
+            onClick={() => onSort(sortKey)}
+        >
+            <div className="flex items-center gap-1 justify-between">
+                {label}
+                {currentSort.key === sortKey && (
+                    currentSort.direction === 'asc' ? <ArrowUp size={14}/> : <ArrowDown size={14}/>
+                )}
+            </div>
+        </th>
+    );
+};
 
 // --- APP ---
 
@@ -107,19 +158,20 @@ const App = () => {
   const [selectedCollaborator, setSelectedCollaborator] = useState<string>('Todos');
   const [selectedDate, setSelectedDate] = useState<string>('Todos');
   
+  // Sort State
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: '', direction: 'asc' });
+
   // Performance State
   const [granularity, setGranularity] = useState<'hourly' | 'daily' | null>(null);
-  const [perfViewMode, setPerfViewMode] = useState<'performance' | 'leaders' | 'indirects'>('performance');
-  const [perfResults, setPerfResults] = useState<PerformanceRow[] | null>(null);
-  const [perfLeaders, setPerfLeaders] = useState<LeaderStat[]>([]);
-  const [perfIndirects, setPerfIndirects] = useState<PerformanceRow[]>([]);
+  const [perfViewMode, setPerfViewMode] = useState<'performance' | 'leaders' | 'collaborators' | 'indirects'>('performance');
+  const [perfResults, setPerfResults] = useState<PerformanceResults | null>(null);
 
   // Setup State
-  const [setupViewMode, setSetupViewMode] = useState<'fast_start' | 'strong_finish' | 'leaders'>('fast_start');
+  const [setupViewMode, setSetupViewMode] = useState<'fast_start' | 'strong_finish' | 'leaders' | 'collaborators'>('fast_start');
   const [setupResults, setSetupResults] = useState<SetupResults | null>(null);
 
   // Lunch State
-  const [lunchViewMode, setLunchViewMode] = useState<'catraca' | 'retorno' | 'total' | 'leaders'>('catraca');
+  const [lunchViewMode, setLunchViewMode] = useState<'catraca' | 'retorno' | 'total' | 'leaders' | 'collaborators'>('catraca');
   const [lunchResults, setLunchResults] = useState<LunchResults | null>(null);
 
   // Refs
@@ -160,17 +212,14 @@ const App = () => {
     const cleanStr = dateStr.replace(/"/g, '').trim();
     let d: Date | null = null;
 
-    // Attempt 1: Standard ISO with Space fix (YYYY-MM-DD HH:mm:ss)
     if (cleanStr.match(/^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}:\d{2})?$/)) {
        d = new Date(cleanStr.replace(' ', 'T'));
        if (!isNaN(d.getTime())) return d;
     }
     
-    // Attempt 1.1: Standard JS parsing
     d = new Date(cleanStr);
     if (!isNaN(d.getTime())) return d;
 
-    // Attempt 2: PT-BR Written
     const monthMap: {[key: string]: number} = {
         'jan': 0, 'fev': 1, 'mar': 2, 'abr': 3, 'mai': 4, 'jun': 5,
         'jul': 6, 'ago': 7, 'set': 8, 'out': 9, 'nov': 10, 'dez': 11
@@ -190,7 +239,6 @@ const App = () => {
         }
     }
 
-    // Attempt 3: PT-BR Numeric
     const ptBrMatch = cleanStr.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
     if (ptBrMatch) {
         const day = parseInt(ptBrMatch[1], 10);
@@ -217,7 +265,31 @@ const App = () => {
     return Math.floor(diffMs / 60000);
   };
 
-  // --- FILTER LOGIC ---
+  // --- FILTER & SORT LOGIC ---
+
+  const handleSort = (key: string) => {
+      let direction: 'asc' | 'desc' = 'asc';
+      if (sortConfig.key === key && sortConfig.direction === 'asc') {
+          direction = 'desc';
+      }
+      setSortConfig({ key, direction });
+  };
+
+  const sortData = <T,>(data: T[]): T[] => {
+      if (!sortConfig.key) return data;
+
+      return [...data].sort((a: any, b: any) => {
+          let valA = a[sortConfig.key];
+          let valB = b[sortConfig.key];
+
+          if (typeof valA === 'string') valA = valA.toLowerCase();
+          if (typeof valB === 'string') valB = valB.toLowerCase();
+
+          if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+          if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+          return 0;
+      });
+  };
 
   const availableDates = useMemo(() => {
     if (!fileData) return [];
@@ -248,11 +320,12 @@ const App = () => {
   }, [fileData, selectedLeader, selectedDate]);
 
   const applyFilters = <T extends { teamLeader: string, nome: string }>(list: T[]) => {
-    return list.filter(item => {
+    const filtered = list.filter(item => {
       const leaderMatch = selectedLeader === 'Todos' || item.teamLeader === selectedLeader;
       const colabMatch = selectedCollaborator === 'Todos' || item.nome === selectedCollaborator;
       return leaderMatch && colabMatch;
     });
+    return sortData(filtered);
   };
 
   useEffect(() => {
@@ -459,17 +532,33 @@ const App = () => {
     }
 
     const indirects = data.filter(row => row.isIndirect);
-    setPerfIndirects(indirects);
 
     const users: Record<string, PerformanceRow> = {};
     const leadersStats: Record<string, { totalImpact: number, totalRows: number, sumProd: number, offendersSet: Set<string>, allPeopleSet: Set<string> }> = {};
+    const collabStats: Record<string, { sumProd: number, count: number, teamLeader: string }> = {};
+    
+    let globalSumProd = 0;
+    let globalRows = 0;
+    const allCollabsSet = new Set<string>();
 
     data.forEach(row => {
       if (row.isIndirect) return;
+      
+      globalRows++;
+      globalSumProd += row.prodLiq || 0;
+      allCollabsSet.add(row.nome);
+
+      // Individual Aggregation for Ranking table
       if (!users[row.nome]) { users[row.nome] = { ...row, totalRows: 0, totalOffenses: 0, history: [] }; }
       const user = users[row.nome];
       if (user.totalRows !== undefined) user.totalRows++;
+
+      // Collaborator Stats Aggregation (For Detailed View)
+      if (!collabStats[row.nome]) { collabStats[row.nome] = { sumProd: 0, count: 0, teamLeader: row.teamLeader }; }
+      collabStats[row.nome].sumProd += row.prodLiq || 0;
+      collabStats[row.nome].count++;
       
+      // Leader Stats Aggregation
       if (row.teamLeader) {
           if (!leadersStats[row.teamLeader]) { leadersStats[row.teamLeader] = { totalImpact: 0, totalRows: 0, sumProd: 0, offendersSet: new Set(), allPeopleSet: new Set() }; }
           const stats = leadersStats[row.teamLeader];
@@ -504,7 +593,25 @@ const App = () => {
             uniqueOffenders: stats.offendersSet.size, avgProd: stats.totalRows > 0 ? (stats.sumProd / stats.totalRows) : 0
         })).filter(l => (l.totalImpact || 0) > 0).sort((a, b) => (b.uniqueOffenders || 0) - (a.uniqueOffenders || 0));
 
-    setPerfResults(rankingUsers); setPerfLeaders(rankingLeaders);
+    const rankingCollaborators: CollaboratorStat[] = Object.entries(collabStats).map(([name, stats]) => ({
+        nome: name,
+        teamLeader: stats.teamLeader,
+        count: stats.count,
+        avgProd: stats.count > 0 ? stats.sumProd / stats.count : 0
+    })).sort((a, b) => (b.avgProd || 0) - (a.avgProd || 0));
+
+    const globalStats: GlobalStats = {
+        avgProd: globalRows > 0 ? globalSumProd / globalRows : 0,
+        totalCollaborators: allCollabsSet.size
+    };
+
+    setPerfResults({
+        individual: rankingUsers,
+        leaders: rankingLeaders,
+        collaborators: rankingCollaborators,
+        indirects: indirects,
+        globalStats: globalStats
+    });
   };
 
   const analyzeSetup = (rawData: SetupRow[]) => {
@@ -517,8 +624,38 @@ const App = () => {
       const sfOffenders = data.filter(d => d.isStrongFinishOffender);
       
       const leadersStats: Record<string, { totalImpact: number, totalRows: number, offendersSet: Set<string>, allPeopleSet: Set<string>, sumFirstBip: number, countFirstBip: number, sumExitDiff: number, countExitDiff: number }> = {};
+      const collabStats: Record<string, { sumFirstBip: number, countFirstBip: number, sumExitDiff: number, countExitDiff: number, teamLeader: string, count: number }> = {};
+      
+      let globalSumFirstBip = 0; let globalCountFirstBip = 0;
+      let globalSumExitDiff = 0; let globalCountExitDiff = 0;
+      const allCollabsSet = new Set<string>();
 
       data.forEach(row => {
+          allCollabsSet.add(row.nome);
+          
+          if (row.tempoBipEntradaSec > 0) {
+             globalSumFirstBip += row.tempoBipEntradaSec;
+             globalCountFirstBip++;
+          }
+          if (row.diffExitSec !== 0) {
+             globalSumExitDiff += row.diffExitSec;
+             globalCountExitDiff++;
+          }
+
+          // Collaborator Stats Aggregation
+          if (!collabStats[row.nome]) { 
+              collabStats[row.nome] = { sumFirstBip: 0, countFirstBip: 0, sumExitDiff: 0, countExitDiff: 0, teamLeader: row.teamLeader, count: 0 }; 
+          }
+          collabStats[row.nome].count++;
+          if (row.tempoBipEntradaSec > 0) {
+              collabStats[row.nome].sumFirstBip += row.tempoBipEntradaSec;
+              collabStats[row.nome].countFirstBip++;
+          }
+          if (row.diffExitSec !== 0) {
+              collabStats[row.nome].sumExitDiff += row.diffExitSec;
+              collabStats[row.nome].countExitDiff++;
+          }
+
           if (!row.teamLeader) return;
           if (!leadersStats[row.teamLeader]) { leadersStats[row.teamLeader] = { totalImpact: 0, totalRows: 0, offendersSet: new Set(), allPeopleSet: new Set(), sumFirstBip: 0, countFirstBip: 0, sumExitDiff: 0, countExitDiff: 0 }; }
           const stats = leadersStats[row.teamLeader];
@@ -536,7 +673,21 @@ const App = () => {
           avgExitDiff: stats.countExitDiff > 0 ? stats.sumExitDiff / stats.countExitDiff : 0
       })).sort((a, b) => (b.uniqueOffenders || 0) - (a.uniqueOffenders || 0));
 
-      setSetupResults({ fastStart: fsOffenders.sort((a,b) => b.tempoBipEntradaSec - a.tempoBipEntradaSec), strongFinish: sfOffenders, leaders: leaderRanking, allRows: data });
+      const collabRanking: CollaboratorStat[] = Object.entries(collabStats).map(([name, stats]) => ({
+        nome: name,
+        teamLeader: stats.teamLeader,
+        count: stats.count,
+        avgFirstBip: stats.countFirstBip > 0 ? stats.sumFirstBip / stats.countFirstBip : 0,
+        avgExitDiff: stats.countExitDiff > 0 ? stats.sumExitDiff / stats.countExitDiff : 0
+      })).sort((a, b) => (b.avgFirstBip || 0) - (a.avgFirstBip || 0));
+
+      const globalStats: GlobalStats = {
+          avgFirstBip: globalCountFirstBip > 0 ? globalSumFirstBip / globalCountFirstBip : 0,
+          avgExitDiff: globalCountExitDiff > 0 ? globalSumExitDiff / globalCountExitDiff : 0,
+          totalCollaborators: allCollabsSet.size
+      };
+
+      setSetupResults({ fastStart: fsOffenders.sort((a,b) => b.tempoBipEntradaSec - a.tempoBipEntradaSec), strongFinish: sfOffenders, leaders: leaderRanking, collaborators: collabRanking, allRows: data, globalStats });
   };
 
   const analyzeLunch = (rawData: LunchRow[]) => {
@@ -550,8 +701,31 @@ const App = () => {
       const totalIntervalOffenders = data.filter(d => d.isTotalIntervalOffender);
       
       const leadersStats: Record<string, { totalImpact: number, totalRows: number, offendersSet: Set<string>, allPeopleSet: Set<string>, sumCatraca: number, countCatraca: number, sumRetorno: number, countRetorno: number }> = {};
+      const collabStats: Record<string, { sumCatraca: number, countCatraca: number, sumRetorno: number, countRetorno: number, teamLeader: string, count: number }> = {};
+      
+      let globalSumCatraca = 0; let globalCountCatraca = 0;
+      let globalSumRetorno = 0; let globalCountRetorno = 0;
+      const allCollabsSet = new Set<string>();
 
       data.forEach(row => {
+          allCollabsSet.add(row.nome);
+          if (row.tempoCatracaSec > 0) { globalSumCatraca += row.tempoCatracaSec; globalCountCatraca++; }
+          if (row.diffRetornoSec > 0) { globalSumRetorno += row.diffRetornoSec; globalCountRetorno++; }
+
+          // Collaborator Stats
+          if (!collabStats[row.nome]) { 
+             collabStats[row.nome] = { sumCatraca: 0, countCatraca: 0, sumRetorno: 0, countRetorno: 0, teamLeader: row.teamLeader, count: 0 }; 
+          }
+          collabStats[row.nome].count++;
+          if (row.tempoCatracaSec > 0) {
+              collabStats[row.nome].sumCatraca += row.tempoCatracaSec;
+              collabStats[row.nome].countCatraca++;
+          }
+          if (row.diffRetornoSec > 0) {
+              collabStats[row.nome].sumRetorno += row.diffRetornoSec;
+              collabStats[row.nome].countRetorno++;
+          }
+
           if (!row.teamLeader) return;
           if (!leadersStats[row.teamLeader]) { leadersStats[row.teamLeader] = { totalImpact: 0, totalRows: 0, offendersSet: new Set(), allPeopleSet: new Set(), sumCatraca: 0, countCatraca: 0, sumRetorno: 0, countRetorno: 0 }; }
           const stats = leadersStats[row.teamLeader];
@@ -569,12 +743,25 @@ const App = () => {
           avgRetorno: stats.countRetorno > 0 ? stats.sumRetorno / stats.countRetorno : 0
       })).sort((a, b) => (b.uniqueOffenders || 0) - (a.uniqueOffenders || 0));
 
-      setLunchResults({ catraca: catracaOffenders.sort((a,b) => b.tempoCatracaSec - a.tempoCatracaSec), retorno: retornoOffenders.sort((a,b) => b.diffRetornoSec - a.diffRetornoSec), totalInterval: totalIntervalOffenders.sort((a,b) => b.totalIntervalSec - a.totalIntervalSec), leaders: leaderRanking, allRows: data });
+      const collabRanking: CollaboratorStat[] = Object.entries(collabStats).map(([name, stats]) => ({
+          nome: name,
+          teamLeader: stats.teamLeader,
+          count: stats.count,
+          avgCatraca: stats.countCatraca > 0 ? stats.sumCatraca / stats.countCatraca : 0,
+          avgRetorno: stats.countRetorno > 0 ? stats.sumRetorno / stats.countRetorno : 0
+      })).sort((a, b) => (b.avgCatraca || 0) - (a.avgCatraca || 0));
+
+      const globalStats: GlobalStats = {
+          avgCatraca: globalCountCatraca > 0 ? globalSumCatraca / globalCountCatraca : 0,
+          avgRetorno: globalCountRetorno > 0 ? globalSumRetorno / globalCountRetorno : 0,
+          totalCollaborators: allCollabsSet.size
+      };
+
+      setLunchResults({ catraca: catracaOffenders.sort((a,b) => b.tempoCatracaSec - a.tempoCatracaSec), retorno: retornoOffenders.sort((a,b) => b.diffRetornoSec - a.diffRetornoSec), totalInterval: totalIntervalOffenders.sort((a,b) => b.totalIntervalSec - a.totalIntervalSec), leaders: leaderRanking, collaborators: collabRanking, allRows: data, globalStats });
   };
 
   const reset = () => {
     setFileData(null); setFileName(''); setPerfResults(null); setSetupResults(null); setLunchResults(null);
-    setPerfLeaders([]); setPerfIndirects([]); setGranularity(null); setDebugMode(false);
     setSelectedLeader('Todos'); setSelectedCollaborator('Todos'); setSelectedDate('Todos');
     setPerfViewMode('performance'); setSetupViewMode('fast_start'); setLunchViewMode('catraca'); setAppMode(null); 
   };
@@ -785,29 +972,49 @@ const App = () => {
                     </div>
                 ) : (
                     <>
-                        <div className="flex border-b border-slate-200 gap-2">
-                            <button onClick={() => setPerfViewMode('performance')} className={`px-6 py-3 font-medium text-sm border-b-2 ${perfViewMode === 'performance' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}>Performance</button>
-                            <button onClick={() => setPerfViewMode('leaders')} className={`px-6 py-3 font-medium text-sm border-b-2 flex items-center gap-2 ${perfViewMode === 'leaders' ? 'border-purple-500 text-purple-600' : 'border-transparent text-slate-500'}`}><BarChart size={16}/> Visão de Líderes</button>
-                            <button onClick={() => setPerfViewMode('indirects')} className={`px-6 py-3 font-medium text-sm border-b-2 ${perfViewMode === 'indirects' ? 'border-orange-500 text-orange-600' : 'border-transparent text-slate-500'}`}>Indiretos ({perfIndirects.length})</button>
+                         {/* GLOBAL STATS CARD */}
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-blue-100 flex flex-wrap gap-8 items-center justify-between">
+                            <div>
+                                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Base Analisada</h3>
+                                <p className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Users className="text-blue-500"/> {perfResults.globalStats.totalCollaborators} <span className="text-sm font-normal text-slate-400">colaboradores</span></p>
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Média Produtividade</h3>
+                                <p className="text-2xl font-bold text-slate-800">{(perfResults.globalStats.avgProd || 0).toFixed(2)}</p>
+                            </div>
+                             <div className="h-10 w-px bg-slate-200 hidden md:block"></div>
+                            <div className="flex gap-2">
+                                <button onClick={() => setPerfViewMode('performance')} className={`px-6 py-3 font-medium text-sm border-b-2 ${perfViewMode === 'performance' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}>Performance</button>
+                                <button onClick={() => setPerfViewMode('leaders')} className={`px-6 py-3 font-medium text-sm border-b-2 flex items-center gap-2 ${perfViewMode === 'leaders' ? 'border-purple-500 text-purple-600' : 'border-transparent text-slate-500'}`}><BarChart size={16}/> Visão de Líderes</button>
+                                <button onClick={() => setPerfViewMode('collaborators')} className={`px-6 py-3 font-medium text-sm border-b-2 flex items-center gap-2 ${perfViewMode === 'collaborators' ? 'border-blue-400 text-blue-500' : 'border-transparent text-slate-500'}`}><User size={16}/> Visão Detalhada</button>
+                                <button onClick={() => setPerfViewMode('indirects')} className={`px-6 py-3 font-medium text-sm border-b-2 ${perfViewMode === 'indirects' ? 'border-orange-500 text-orange-600' : 'border-transparent text-slate-500'}`}>Indiretos ({perfResults.indirects.length})</button>
+                            </div>
                         </div>
                         
                         {/* VIEW: PERFORMANCE (INDIVIDUAL) */}
                         {perfViewMode === 'performance' && (
                             <>
-                                <div className="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200 w-full">
-                                    <div className="flex gap-2"><span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-xs font-bold uppercase">{granularity}</span></div>
-                                    <button onClick={softReset} className="flex items-center gap-2 text-slate-600 hover:text-slate-900 text-sm"><RefreshCcw size={14}/> Resetar</button>
-                                </div>
-                                {perfLeaders.length > 0 && (
-                                    <div className="bg-slate-800 text-white rounded-xl p-6 shadow-lg w-full">
+                                {perfResults.leaders.length > 0 && (
+                                    <div className="bg-slate-800 text-white rounded-xl p-6 shadow-lg w-full mt-6">
                                         <h3 className="text-sm font-bold uppercase text-slate-400 mb-4 flex items-center gap-2"><ShieldAlert size={16}/> Top Team Leaders (Impacto Total)</h3>
-                                        <div className="grid md:grid-cols-3 gap-4">{perfLeaders.slice(0,3).map((l, i) => (<div key={i} className="bg-slate-700/50 p-3 rounded border border-slate-600 flex justify-between"><span className="font-medium truncate pr-2">{l.name}</span><span className="bg-red-500 text-xs font-bold px-2 py-1 rounded">{l.totalImpact}</span></div>))}</div>
+                                        <div className="grid md:grid-cols-3 gap-4">{perfResults.leaders.slice(0,3).map((l, i) => (<div key={i} className="bg-slate-700/50 p-3 rounded border border-slate-600 flex justify-between"><span className="font-medium truncate pr-2">{l.name}</span><span className="bg-red-500 text-xs font-bold px-2 py-1 rounded">{l.totalImpact}</span></div>))}</div>
                                     </div>
                                 )}
-                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
+                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full mt-6">
+                                    <div className="flex items-center justify-between p-4 bg-slate-50 border-b border-slate-100">
+                                        <div className="flex gap-2"><span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-xs font-bold uppercase">{granularity}</span></div>
+                                        <button onClick={softReset} className="flex items-center gap-2 text-slate-600 hover:text-slate-900 text-sm"><RefreshCcw size={14}/> Resetar</button>
+                                    </div>
                                     <table className="w-full text-left text-sm">
-                                        <thead className="bg-slate-100 text-slate-600"><tr><th className="px-6 py-3">Colaborador</th><th className="px-6 py-3">Leader</th><th className="px-6 py-3 text-center">Maior Seq.</th><th className="px-6 py-3 text-center">Falhas</th></tr></thead>
-                                        <tbody className="divide-y divide-slate-100">{applyFilters(perfResults).map((u, i) => (<tr key={i} className="hover:bg-slate-50"><td className="px-6 py-4 font-medium">{u.nome}</td><td className="px-6 py-4 text-slate-500">{u.teamLeader}</td><td className="px-6 py-4 text-center"><span className="bg-red-100 text-red-700 px-2 py-1 rounded font-bold">{u.maxStreak}</span></td><td className="px-6 py-4 text-center font-bold">{u.totalOffenses}</td></tr>))}</tbody>
+                                        <thead className="bg-slate-100 text-slate-600">
+                                            <tr>
+                                                <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
+                                                <SortableHeader label="Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
+                                                <SortableHeader label="Maior Seq." sortKey="maxStreak" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                                <SortableHeader label="Falhas" sortKey="totalOffenses" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">{applyFilters(perfResults.individual).map((u, i) => (<tr key={i} className="hover:bg-slate-50"><td className="px-6 py-4 font-medium">{u.nome}</td><td className="px-6 py-4 text-slate-500">{u.teamLeader}</td><td className="px-6 py-4 text-center"><span className="bg-red-100 text-red-700 px-2 py-1 rounded font-bold">{u.maxStreak}</span></td><td className="px-6 py-4 text-center font-bold">{u.totalOffenses}</td></tr>))}</tbody>
                                     </table>
                                 </div>
                             </>
@@ -815,11 +1022,11 @@ const App = () => {
 
                         {/* VIEW: LEADERS (ANALYSIS) */}
                         {perfViewMode === 'leaders' && (
-                            <div className="space-y-6">
+                            <div className="space-y-6 mt-6">
                                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm w-full">
                                     <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Percent size={20} className="text-purple-500"/> Ranking por % do Time</h3>
                                     <div className="space-y-4">
-                                        {[...perfLeaders].sort((a,b) => (b.offensePercentage || 0) - (a.offensePercentage || 0)).slice(0, 5).map((l, i) => {
+                                        {[...perfResults.leaders].sort((a,b) => (b.offensePercentage || 0) - (a.offensePercentage || 0)).slice(0, 5).map((l, i) => {
                                             return (
                                                 <div key={i}>
                                                     <div className="flex justify-between text-xs mb-1">
@@ -838,21 +1045,21 @@ const App = () => {
                                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
                                     <div className="p-4 border-b border-slate-100 bg-slate-50 font-bold text-slate-700 flex justify-between">
                                         <span>Detalhamento dos Líderes</span>
-                                        <span className="text-xs text-slate-400 font-normal self-center">Ordenado por Pessoas Ofensoras</span>
+                                        <span className="text-xs text-slate-400 font-normal self-center">Clique no cabeçalho para ordenar</span>
                                     </div>
                                     <table className="w-full text-left text-sm">
                                         <thead className="bg-slate-100 text-slate-600">
                                             <tr>
-                                                <th className="px-6 py-3">Team Leader</th>
-                                                <th className="px-6 py-3 text-center">Total Pessoas</th>
-                                                <th className="px-6 py-3 text-center bg-blue-50 text-blue-800">Pessoas Ofensoras</th>
-                                                <th className="px-6 py-3 text-center">Total de Falhas</th>
-                                                <th className="px-6 py-3 text-center bg-green-50 text-green-800">Média Prod.</th>
-                                                <th className="px-6 py-3 text-center">% Impacto</th>
+                                                <SortableHeader label="Team Leader" sortKey="name" currentSort={sortConfig} onSort={handleSort}/>
+                                                <SortableHeader label="Total Pessoas" sortKey="totalPeople" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                                <SortableHeader label="Pessoas Ofensoras" sortKey="uniqueOffenders" currentSort={sortConfig} onSort={handleSort} className="text-center bg-blue-50 text-blue-800"/>
+                                                <SortableHeader label="Total de Falhas" sortKey="totalImpact" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                                <SortableHeader label="Média Prod." sortKey="avgProd" currentSort={sortConfig} onSort={handleSort} className="text-center bg-green-50 text-green-800"/>
+                                                <SortableHeader label="% Impacto" sortKey="offensePercentage" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
-                                            {perfLeaders.map((l, i) => (
+                                            {sortData(perfResults.leaders).map((l, i) => (
                                                 <tr key={i} className="hover:bg-slate-50">
                                                     <td className="px-6 py-4 font-medium text-slate-800">{l.name}</td>
                                                     <td className="px-6 py-4 text-center text-slate-500">{l.totalPeople}</td>
@@ -868,12 +1075,46 @@ const App = () => {
                             </div>
                         )}
 
+                        {/* VIEW: COLLABORATORS (NEW DETAILED VIEW) */}
+                        {perfViewMode === 'collaborators' && (
+                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full mt-6">
+                                <div className="p-4 border-b border-slate-100 bg-slate-50 font-bold text-slate-700">Visão Detalhada por Colaborador</div>
+                                <table className="w-full text-left text-sm">
+                                    <thead className="bg-slate-100 text-slate-600">
+                                        <tr>
+                                            <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
+                                            <SortableHeader label="Team Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
+                                            <SortableHeader label="Ocorrências" sortKey="count" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                            <SortableHeader label="Média Produtividade" sortKey="avgProd" currentSort={sortConfig} onSort={handleSort} className="text-center bg-green-50 text-green-800"/>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {applyFilters(perfResults.collaborators).map((c, i) => (
+                                            <tr key={i} className="hover:bg-slate-50">
+                                                <td className="px-6 py-4 font-medium text-slate-800">{c.nome}</td>
+                                                <td className="px-6 py-4 text-slate-500">{c.teamLeader}</td>
+                                                <td className="px-6 py-4 text-center font-bold text-slate-600">{c.count}</td>
+                                                <td className="px-6 py-4 text-center font-mono font-bold text-green-600 bg-green-50/30">{(c.avgProd || 0).toFixed(2)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+
                         {/* VIEW: INDIRECTS */}
                         {perfViewMode === 'indirects' && (
-                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
+                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full mt-6">
                                 <table className="w-full text-left text-sm">
-                                    <thead className="bg-orange-50 text-orange-800"><tr><th className="px-6 py-3">Nome</th><th className="px-6 py-3">Leader</th><th className="px-6 py-3">Tempo</th><th className="px-6 py-3">Unidades</th></tr></thead>
-                                    <tbody className="divide-y divide-slate-100">{applyFilters(perfIndirects).map((u, i) => (<tr key={i}><td className="px-6 py-3">{u.nome}</td><td className="px-6 py-3">{u.teamLeader}</td><td className="px-6 py-3">{u.tempoProcRaw}</td><td className="px-6 py-3">{u.unidades}</td></tr>))}</tbody>
+                                    <thead className="bg-orange-50 text-orange-800">
+                                        <tr>
+                                            <SortableHeader label="Nome" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
+                                            <SortableHeader label="Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
+                                            <SortableHeader label="Tempo" sortKey="tempoProcRaw" currentSort={sortConfig} onSort={handleSort}/>
+                                            <SortableHeader label="Unidades" sortKey="unidades" currentSort={sortConfig} onSort={handleSort}/>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">{applyFilters(perfResults.indirects).map((u, i) => (<tr key={i}><td className="px-6 py-3">{u.nome}</td><td className="px-6 py-3">{u.teamLeader}</td><td className="px-6 py-3">{u.tempoProcRaw}</td><td className="px-6 py-3">{u.unidades}</td></tr>))}</tbody>
                                 </table>
                             </div>
                         )}
@@ -887,10 +1128,25 @@ const App = () => {
             <div className="space-y-6 w-full">
                 <div className="flex justify-between items-center bg-white p-4 rounded-lg border border-slate-200 shadow-sm w-full">
                     <div className="flex items-center gap-2"><span className="font-bold text-slate-700">Arquivo:</span><span className="text-slate-500 text-sm">{fileName}</span></div>
-                    
                     <div className="flex gap-4">
                         <button onClick={() => setDebugMode(!debugMode)} className="flex items-center gap-2 text-slate-500 hover:text-blue-600 text-sm"><Eye size={16} /> Diag</button>
                         <button onClick={softReset} className="text-red-500 hover:text-red-700 text-sm font-medium">Trocar Arquivo</button>
+                    </div>
+                </div>
+
+                {/* GLOBAL STATS CARD */}
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-purple-100 flex flex-wrap gap-8 items-center justify-between">
+                    <div>
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Base Analisada</h3>
+                        <p className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Users className="text-purple-500"/> {setupResults.globalStats.totalCollaborators} <span className="text-sm font-normal text-slate-400">colaboradores</span></p>
+                    </div>
+                    <div>
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Média 1º Bip</h3>
+                        <p className="text-2xl font-bold text-slate-800 font-mono">{secondsToTime(setupResults.globalStats.avgFirstBip || 0)}</p>
+                    </div>
+                    <div>
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Média Desvio Saída</h3>
+                        <p className="text-2xl font-bold text-slate-800 font-mono">{secondsToTime(setupResults.globalStats.avgExitDiff || 0)}</p>
                     </div>
                 </div>
 
@@ -899,44 +1155,37 @@ const App = () => {
                     <h4 className="font-bold text-sm mb-2 text-slate-700">Diagnóstico Setup (Primeiras 3 linhas):</h4>
                     <table className="w-full text-xs text-left bg-white rounded border border-slate-300">
                         <thead className="bg-slate-200">
-                        <tr>
-                            <th className="p-2 border">Período</th>
-                            <th className="p-2 border">Colab</th>
-                            <th className="p-2 border">Último Bip</th>
-                            <th className="p-2 border">Target Saída</th>
-                            <th className="p-2 border">Diff Exit (s)</th>
-                            <th className="p-2 border">Status</th>
-                        </tr>
+                        <tr><th className="p-2 border">Colab</th><th className="p-2 border">Último Bip</th><th className="p-2 border">Target Saída</th><th className="p-2 border">Diff Exit (s)</th><th className="p-2 border">Status</th></tr>
                         </thead>
                         <tbody>
                         {setupResults.allRows.slice(0, 3).map((row: SetupRow, i) => (
-                            <tr key={i} className="border-b">
-                            <td className="p-2 border">{row.periodo}</td>
-                            <td className="p-2 border">{row.nome}</td>
-                            <td className="p-2 border">{row.ultimoBipRaw}</td>
-                            <td className="p-2 border">{row.targetSaidaRaw}</td>
-                            <td className="p-2 border">{row.diffExitSec}</td>
-                            <td className="p-2 border font-bold">
-                                {row.isStrongFinishOffender ? <span className="text-red-600">NOK</span> : <span className="text-green-600">OK</span>}
-                            </td>
-                            </tr>
+                            <tr key={i} className="border-b"><td className="p-2 border">{row.nome}</td><td className="p-2 border">{row.ultimoBipRaw}</td><td className="p-2 border">{row.targetSaidaRaw}</td><td className="p-2 border">{row.diffExitSec}</td><td className="p-2 border font-bold">{row.isStrongFinishOffender ? <span className="text-red-600">NOK</span> : <span className="text-green-600">OK</span>}</td></tr>
                         ))}
                         </tbody>
                     </table>
                     </div>
                 )}
                 
-                <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 w-full">
+                <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 w-full mt-4">
                     <button onClick={() => setSetupViewMode('fast_start')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'fast_start' ? 'border-red-500 text-red-600 bg-red-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Timer size={18}/> Fast Start <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(setupResults.fastStart).length}</span></button>
                     <button onClick={() => setSetupViewMode('strong_finish')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'strong_finish' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><CheckCircle size={18}/> Strong Finish <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(setupResults.strongFinish).length}</span></button>
                     <button onClick={() => setSetupViewMode('leaders')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'leaders' ? 'border-purple-500 text-purple-600 bg-purple-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><BarChart size={18}/> Visão de Líderes</button>
+                    <button onClick={() => setSetupViewMode('collaborators')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'collaborators' ? 'border-blue-400 text-blue-500' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><User size={18}/> Visão Detalhada</button>
                 </div>
 
                 {setupViewMode === 'fast_start' && (
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-red-50 text-red-800 text-sm border-b border-red-100 flex items-center gap-2"><AlertTriangle size={16}/> Colaboradores com <strong>Tempo de Bip Entrada {'>'} 15:00</strong></div>
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-100 text-slate-600"><tr><th className="px-6 py-3">Colaborador</th><th className="px-6 py-3">Leader</th><th className="px-6 py-3">Clock In</th><th className="px-6 py-3">Primeiro Bip</th><th className="px-6 py-3 text-right">Tempo Bip Entrada</th></tr></thead>
+                            <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                    <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Clock In" sortKey="clockIn" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Primeiro Bip" sortKey="primeiroBip" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Tempo Bip Entrada" sortKey="tempoBipEntrada" currentSort={sortConfig} onSort={handleSort} className="text-right"/>
+                                </tr>
+                            </thead>
                             <tbody className="divide-y divide-slate-100">{applyFilters(setupResults.fastStart).map((row, i) => (<tr key={i} className="hover:bg-slate-50"><td className="px-6 py-4 font-medium">{row.nome}</td><td className="px-6 py-4 text-slate-500">{row.teamLeader}</td><td className="px-6 py-4 text-slate-500 text-xs font-mono">{row.clockIn}</td><td className="px-6 py-4 text-slate-500 text-xs font-mono">{row.primeiroBip}</td><td className="px-6 py-4 text-right font-bold text-red-600 font-mono">{row.tempoBipEntrada}</td></tr>))}</tbody>
                         </table>
                     </div>
@@ -945,7 +1194,15 @@ const App = () => {
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-blue-50 text-blue-800 text-sm border-b border-blue-100 flex items-center gap-2"><AlertTriangle size={16}/> Saída antecipada ou demorada.</div>
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-100 text-slate-600"><tr><th className="px-6 py-3">Colaborador</th><th className="px-6 py-3">Motivo</th><th className="px-6 py-3">Último Bip</th><th className="px-6 py-3">Target Saída</th><th className="px-6 py-3">Clock Out</th></tr></thead>
+                            <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                    <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Motivo" sortKey="sfReason" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Último Bip" sortKey="ultimoBipRaw" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Target Saída" sortKey="targetSaidaRaw" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Clock Out" sortKey="clockOutRaw" currentSort={sortConfig} onSort={handleSort}/>
+                                </tr>
+                            </thead>
                             <tbody className="divide-y divide-slate-100">{applyFilters(setupResults.strongFinish).map((row, i) => (<tr key={i} className="hover:bg-slate-50"><td className="px-6 py-4 font-medium">{row.nome}</td><td className="px-6 py-4"><span className={`text-xs px-2 py-1 rounded font-bold ${row.sfReason.includes('meta') ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{row.sfReason}</span></td><td className="px-6 py-4 text-slate-500 text-xs font-mono">{row.ultimoBipRaw}</td><td className="px-6 py-4 text-slate-500 text-xs font-mono">{row.targetSaidaRaw}</td><td className="px-6 py-4 text-slate-500 text-xs font-mono">{row.clockOutRaw}</td></tr>))}</tbody>
                         </table>
                     </div>
@@ -954,22 +1211,22 @@ const App = () => {
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-purple-50 text-purple-800 text-sm border-b border-purple-100 flex justify-between">
                             <span className="font-bold flex items-center gap-2"><Users size={16}/> Análise de Setup por Líder</span>
-                            <span className="text-xs font-normal">Ordenado por Pessoas Ofensoras</span>
+                            <span className="text-xs font-normal">Clique para ordenar</span>
                         </div>
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-100 text-slate-600">
                                 <tr>
-                                    <th className="px-6 py-3">Team Leader</th>
-                                    <th className="px-6 py-3 text-center">Total Pessoas</th>
-                                    <th className="px-6 py-3 text-center bg-purple-50 text-purple-900">Pessoas Ofensoras</th>
-                                    <th className="px-6 py-3 text-center">Total Falhas</th>
-                                    <th className="px-6 py-3 text-center bg-slate-200 text-slate-700">Média 1º Bip</th>
-                                    <th className="px-6 py-3 text-center bg-slate-200 text-slate-700">Média Desvio Saída</th>
-                                    <th className="px-6 py-3 text-center">% Impacto</th>
+                                    <SortableHeader label="Team Leader" sortKey="name" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Total Pessoas" sortKey="totalPeople" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                    <SortableHeader label="Pessoas Ofensoras" sortKey="uniqueOffenders" currentSort={sortConfig} onSort={handleSort} className="text-center bg-purple-50 text-purple-900"/>
+                                    <SortableHeader label="Total Falhas" sortKey="totalImpact" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                    <SortableHeader label="Média 1º Bip" sortKey="avgFirstBip" currentSort={sortConfig} onSort={handleSort} className="text-center bg-slate-200 text-slate-700"/>
+                                    <SortableHeader label="Média Desvio Saída" sortKey="avgExitDiff" currentSort={sortConfig} onSort={handleSort} className="text-center bg-slate-200 text-slate-700"/>
+                                    <SortableHeader label="% Impacto" sortKey="offensePercentage" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                                {setupResults.leaders.map((l, i) => (
+                                {sortData(setupResults.leaders).map((l, i) => (
                                     <tr key={i} className="hover:bg-slate-50">
                                         <td className="px-6 py-4 font-medium text-slate-800">{l.name}</td>
                                         <td className="px-6 py-4 text-center text-slate-500">{l.totalPeople}</td>
@@ -978,6 +1235,33 @@ const App = () => {
                                         <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(l.avgFirstBip || 0)}</td>
                                         <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(l.avgExitDiff || 0)}</td>
                                         <td className="px-6 py-4 text-center font-bold text-slate-700">{(l.offensePercentage || 0).toFixed(1)}%</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+                {setupViewMode === 'collaborators' && (
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
+                        <div className="p-4 bg-purple-50 text-purple-800 text-sm border-b border-purple-100 font-bold">Visão Detalhada por Colaborador</div>
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                    <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Team Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Ocorrências" sortKey="count" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                    <SortableHeader label="Média 1º Bip" sortKey="avgFirstBip" currentSort={sortConfig} onSort={handleSort} className="text-center bg-slate-200 text-slate-700"/>
+                                    <SortableHeader label="Média Desvio Saída" sortKey="avgExitDiff" currentSort={sortConfig} onSort={handleSort} className="text-center bg-slate-200 text-slate-700"/>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {applyFilters(setupResults.collaborators).map((c, i) => (
+                                    <tr key={i} className="hover:bg-slate-50">
+                                        <td className="px-6 py-4 font-medium text-slate-800">{c.nome}</td>
+                                        <td className="px-6 py-4 text-slate-500">{c.teamLeader}</td>
+                                        <td className="px-6 py-4 text-center font-bold text-slate-600">{c.count}</td>
+                                        <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(c.avgFirstBip || 0)}</td>
+                                        <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(c.avgExitDiff || 0)}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -996,8 +1280,24 @@ const App = () => {
                     <button onClick={softReset} className="text-red-500 hover:text-red-700 text-sm font-medium">Trocar Arquivo</button>
                 </div>
 
+                {/* GLOBAL STATS CARD */}
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-orange-100 flex flex-wrap gap-8 items-center justify-between">
+                    <div>
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Base Analisada</h3>
+                        <p className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Users className="text-orange-500"/> {lunchResults.globalStats.totalCollaborators} <span className="text-sm font-normal text-slate-400">colaboradores</span></p>
+                    </div>
+                    <div>
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Média Catraca</h3>
+                        <p className="text-2xl font-bold text-slate-800 font-mono">{secondsToTime(lunchResults.globalStats.avgCatraca || 0)}</p>
+                    </div>
+                    <div>
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Média Retorno</h3>
+                        <p className="text-2xl font-bold text-slate-800 font-mono">{secondsToTime(lunchResults.globalStats.avgRetorno || 0)}</p>
+                    </div>
+                </div>
+
                 {/* Tabs */}
-                <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 w-full">
+                <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 w-full mt-4">
                     <button onClick={() => setLunchViewMode('catraca')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'catraca' ? 'border-red-500 text-red-600 bg-red-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                         <Clock size={18}/> Excesso Catraca <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.catraca).length}</span>
                     </button>
@@ -1008,22 +1308,23 @@ const App = () => {
                         <TrendingUp size={18}/> Tempo Total {'>'} 1h10 <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.totalInterval).length}</span>
                     </button>
                     <button onClick={() => setLunchViewMode('leaders')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'leaders' ? 'border-orange-500 text-orange-600 bg-orange-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><BarChart size={18}/> Visão de Líderes</button>
+                    <button onClick={() => setLunchViewMode('collaborators')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'collaborators' ? 'border-blue-400 text-blue-500' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><User size={18}/> Visão Detalhada</button>
                 </div>
 
                 {/* View: Catraca */}
                 {lunchViewMode === 'catraca' && (
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-red-50 text-red-800 text-sm border-b border-red-100 flex items-center gap-2">
-                            <AlertTriangle size={16}/> Colaboradores com <strong>Tempo de Catraca {'>'} 01:00:30</strong>
+                            <AlertTriangle size={16}/> Colaboradores com <strong>Tempo de Catraca {'>'} 01:00:00</strong>
                         </div>
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-100 text-slate-600">
                                 <tr>
-                                    <th className="px-6 py-3 font-semibold">Colaborador</th>
-                                    <th className="px-6 py-3 font-semibold">Leader</th>
-                                    <th className="px-6 py-3 font-semibold">Saída Catraca</th>
-                                    <th className="px-6 py-3 font-semibold">Retorno Catraca</th>
-                                    <th className="px-6 py-3 font-semibold text-right">Tempo Total</th>
+                                    <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Saída Catraca" sortKey="saidaCatraca" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Retorno Catraca" sortKey="retornoCatraca" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Tempo Total" sortKey="tempoCatracaRaw" currentSort={sortConfig} onSort={handleSort} className="text-right"/>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -1051,11 +1352,11 @@ const App = () => {
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-100 text-slate-600">
                                 <tr>
-                                    <th className="px-6 py-3 font-semibold">Colaborador</th>
-                                    <th className="px-6 py-3 font-semibold">Leader</th>
-                                    <th className="px-6 py-3 font-semibold">Retorno Catraca</th>
-                                    <th className="px-6 py-3 font-semibold">Retorno BIP</th>
-                                    <th className="px-6 py-3 font-semibold text-right">Diferença (Atraso)</th>
+                                    <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Retorno Catraca" sortKey="retornoCatraca" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Retorno BIP" sortKey="retornoBip" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Diferença (Atraso)" sortKey="diffRetornoFormatted" currentSort={sortConfig} onSort={handleSort} className="text-right"/>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -1083,11 +1384,11 @@ const App = () => {
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-100 text-slate-600">
                                 <tr>
-                                    <th className="px-6 py-3 font-semibold">Colaborador</th>
-                                    <th className="px-6 py-3 font-semibold">Leader</th>
-                                    <th className="px-6 py-3 font-semibold">Tempo Catraca</th>
-                                    <th className="px-6 py-3 font-semibold">Tempo Retorno</th>
-                                    <th className="px-6 py-3 font-semibold text-right">Soma Total</th>
+                                    <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Tempo Catraca" sortKey="tempoCatracaRaw" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Tempo Retorno" sortKey="diffRetornoFormatted" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Soma Total" sortKey="totalIntervalFormatted" currentSort={sortConfig} onSort={handleSort} className="text-right"/>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -1111,22 +1412,22 @@ const App = () => {
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-orange-50 text-orange-800 text-sm border-b border-orange-100 flex justify-between">
                             <span className="font-bold flex items-center gap-2"><Users size={16}/> Análise de Intervalo por Líder</span>
-                            <span className="text-xs font-normal">Ordenado por Pessoas Ofensoras</span>
+                            <span className="text-xs font-normal">Clique para ordenar</span>
                         </div>
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-100 text-slate-600">
                                 <tr>
-                                    <th className="px-6 py-3">Team Leader</th>
-                                    <th className="px-6 py-3 text-center">Total Pessoas</th>
-                                    <th className="px-6 py-3 text-center bg-orange-100 text-orange-900">Pessoas Ofensoras</th>
-                                    <th className="px-6 py-3 text-center">Total Falhas</th>
-                                    <th className="px-6 py-3 text-center bg-slate-200 text-slate-700">Média Catraca</th>
-                                    <th className="px-6 py-3 text-center bg-slate-200 text-slate-700">Média Retorno</th>
-                                    <th className="px-6 py-3 text-center">% Impacto</th>
+                                    <SortableHeader label="Team Leader" sortKey="name" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Total Pessoas" sortKey="totalPeople" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                    <SortableHeader label="Pessoas Ofensoras" sortKey="uniqueOffenders" currentSort={sortConfig} onSort={handleSort} className="text-center bg-orange-100 text-orange-900"/>
+                                    <SortableHeader label="Total Falhas" sortKey="totalImpact" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                    <SortableHeader label="Média Catraca" sortKey="avgCatraca" currentSort={sortConfig} onSort={handleSort} className="text-center bg-slate-200 text-slate-700"/>
+                                    <SortableHeader label="Média Retorno" sortKey="avgRetorno" currentSort={sortConfig} onSort={handleSort} className="text-center bg-slate-200 text-slate-700"/>
+                                    <SortableHeader label="% Impacto" sortKey="offensePercentage" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                                {lunchResults.leaders.map((l, i) => (
+                                {sortData(lunchResults.leaders).map((l, i) => (
                                     <tr key={i} className="hover:bg-slate-50">
                                         <td className="px-6 py-4 font-medium text-slate-800">{l.name}</td>
                                         <td className="px-6 py-4 text-center text-slate-500">{l.totalPeople}</td>
@@ -1135,6 +1436,35 @@ const App = () => {
                                         <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(l.avgCatraca || 0)}</td>
                                         <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(l.avgRetorno || 0)}</td>
                                         <td className="px-6 py-4 text-center font-bold text-slate-700">{(l.offensePercentage || 0).toFixed(1)}%</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {/* View: Collaborators (NEW DETAILED VIEW) */}
+                {lunchViewMode === 'collaborators' && (
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
+                        <div className="p-4 bg-orange-50 text-orange-800 font-bold border-b border-orange-100">Visão Detalhada por Colaborador</div>
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                    <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Team Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
+                                    <SortableHeader label="Ocorrências" sortKey="count" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                    <SortableHeader label="Média Catraca" sortKey="avgCatraca" currentSort={sortConfig} onSort={handleSort} className="text-center bg-slate-200 text-slate-700"/>
+                                    <SortableHeader label="Média Retorno" sortKey="avgRetorno" currentSort={sortConfig} onSort={handleSort} className="text-center bg-slate-200 text-slate-700"/>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {applyFilters(lunchResults.collaborators).map((c, i) => (
+                                    <tr key={i} className="hover:bg-slate-50">
+                                        <td className="px-6 py-4 font-medium text-slate-800">{c.nome}</td>
+                                        <td className="px-6 py-4 text-slate-500">{c.teamLeader}</td>
+                                        <td className="px-6 py-4 text-center font-bold text-slate-600">{c.count}</td>
+                                        <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(c.avgCatraca || 0)}</td>
+                                        <td className="px-6 py-4 text-center font-mono text-slate-600 bg-slate-50">{secondsToTime(c.avgRetorno || 0)}</td>
                                     </tr>
                                 ))}
                             </tbody>

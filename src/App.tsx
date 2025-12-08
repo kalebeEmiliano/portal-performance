@@ -100,7 +100,7 @@ interface SetupResults {
   fastStart: SetupRow[];
   strongFinish: SetupRow[];
   leaders: LeaderStat[];
-  collaborators: CollaboratorStat[]; // Nova lista de médias por colaborador
+  collaborators: CollaboratorStat[]; 
   allRows: SetupRow[];
   globalStats: GlobalStats;
 }
@@ -110,7 +110,7 @@ interface LunchResults {
   retorno: LunchRow[];
   totalInterval: LunchRow[]; 
   leaders: LeaderStat[];
-  collaborators: CollaboratorStat[]; // Nova lista de médias por colaborador
+  collaborators: CollaboratorStat[]; 
   allRows: LunchRow[];
   globalStats: GlobalStats;
 }
@@ -118,7 +118,7 @@ interface LunchResults {
 interface PerformanceResults {
     individual: PerformanceRow[];
     leaders: LeaderStat[];
-    collaborators: CollaboratorStat[]; // Nova lista de médias por colaborador
+    collaborators: CollaboratorStat[]; 
     indirects: PerformanceRow[];
     globalStats: GlobalStats;
 }
@@ -337,7 +337,7 @@ const App = () => {
     } else if (appMode === 'lunch') {
         analyzeLunch(fileData);
     }
-  }, [selectedDate]);
+  }, [selectedDate, selectedLeader, selectedCollaborator]); // Re-run on Leader/Colab change too
 
   // --- HANDLERS ---
 
@@ -436,7 +436,6 @@ const App = () => {
       const IDX_PRIMEIRO_BIP = findIndex(['PRIMEIRO BIP']);
       const IDX_TEMPO_BIP_ENTRADA = findIndex(['TEMPO DE BIP ENTRADA']);
       
-      // CORREÇÃO: Busca exata ou que NÃO contenha PENULTIMO/DIFF
       const IDX_ULTIMO_BIP = headers.findIndex(h => h.includes('ULTIMO BIP') && !h.includes('PENULTIMO') && !h.includes('DIFF'));
       
       const IDX_TARGET_SAIDA = findIndex(['DATETIME TARGET SAIDA', 'TARGET SAIDA']); 
@@ -526,10 +525,16 @@ const App = () => {
     setGranularity(mode);
     if (!fileData) return;
     
+    // 1. FILTERING DATA FIRST
     let data = fileData as PerformanceRow[];
     if (selectedDate !== 'Todos') {
         data = data.filter(r => r.periodo === selectedDate);
     }
+    // Filter by Leader/Colab at DATA level before calc stats
+    if (selectedLeader !== 'Todos') {
+        data = data.filter(r => r.teamLeader === selectedLeader);
+    }
+    // We don't filter by collaborator here for GLOBAL stats, but we will for the table
 
     const indirects = data.filter(row => row.isIndirect);
 
@@ -548,12 +553,12 @@ const App = () => {
       globalSumProd += row.prodLiq || 0;
       allCollabsSet.add(row.nome);
 
-      // Individual Aggregation for Ranking table
+      // Individual Aggregation
       if (!users[row.nome]) { users[row.nome] = { ...row, totalRows: 0, totalOffenses: 0, history: [] }; }
       const user = users[row.nome];
       if (user.totalRows !== undefined) user.totalRows++;
 
-      // Collaborator Stats Aggregation (For Detailed View)
+      // Collaborator Stats Aggregation
       if (!collabStats[row.nome]) { collabStats[row.nome] = { sumProd: 0, count: 0, teamLeader: row.teamLeader }; }
       collabStats[row.nome].sumProd += row.prodLiq || 0;
       collabStats[row.nome].count++;
@@ -618,6 +623,9 @@ const App = () => {
       let data = rawData;
       if (selectedDate !== 'Todos') {
           data = data.filter(r => r.periodo === selectedDate);
+      }
+      if (selectedLeader !== 'Todos') {
+          data = data.filter(r => r.teamLeader === selectedLeader);
       }
 
       const fsOffenders = data.filter(d => d.isFastStartOffender);
@@ -694,6 +702,9 @@ const App = () => {
       let data = rawData;
       if (selectedDate !== 'Todos') {
           data = data.filter(r => r.periodo === selectedDate);
+      }
+      if (selectedLeader !== 'Todos') {
+          data = data.filter(r => r.teamLeader === selectedLeader);
       }
 
       const catracaOffenders = data.filter(d => d.isCatracaOffender);
@@ -1010,8 +1021,8 @@ const App = () => {
                                             <tr>
                                                 <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
                                                 <SortableHeader label="Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
-                                                <SortableHeader label="Maior Seq." sortKey="maxStreak" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
-                                                <SortableHeader label="Falhas" sortKey="totalOffenses" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                                <SortableHeader label="Seq. Dias Falhas" sortKey="maxStreak" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                                <SortableHeader label="Total de Falhas" sortKey="totalOffenses" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">{applyFilters(perfResults.individual).map((u, i) => (<tr key={i} className="hover:bg-slate-50"><td className="px-6 py-4 font-medium">{u.nome}</td><td className="px-6 py-4 text-slate-500">{u.teamLeader}</td><td className="px-6 py-4 text-center"><span className="bg-red-100 text-red-700 px-2 py-1 rounded font-bold">{u.maxStreak}</span></td><td className="px-6 py-4 text-center font-bold">{u.totalOffenses}</td></tr>))}</tbody>
@@ -1315,7 +1326,7 @@ const App = () => {
                 {lunchViewMode === 'catraca' && (
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-red-50 text-red-800 text-sm border-b border-red-100 flex items-center gap-2">
-                            <AlertTriangle size={16}/> Colaboradores com <strong>Tempo de Catraca {'>'} 01:00:00</strong>
+                            <AlertTriangle size={16}/> Colaboradores com <strong>Tempo de Catraca {'>'} 01:00:30</strong>
                         </div>
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-100 text-slate-600">

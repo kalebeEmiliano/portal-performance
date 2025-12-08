@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, useMemo, useEffect, useRef } from 'react';
+import { useState, type ChangeEvent, useMemo, useEffect } from 'react';
 import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Users, RefreshCcw, Eye, ShieldAlert, Timer, ArrowRight, Settings, Coffee, Clock, Filter, BarChart, Percent, TrendingUp, Calendar, Image as ImageIcon, ArrowUp, ArrowDown, User } from 'lucide-react';
 
 // --- INTERFACES (TIPAGENS) ---
@@ -145,7 +145,7 @@ const SortableHeader = ({ label, sortKey, currentSort, onSort, className = "" }:
 const App = () => {
   // Global State
   const [appMode, setAppMode] = useState<'performance' | 'setup' | 'lunch' | null>(null);
-  const [logoUrl, setLogoUrl] = useState<string | null>('https://placehold.co/100x100/3b82f6/ffffff?text=Logo'); 
+  const logoUrl = 'https://i.imgur.com/NXiCMsQ.png';
   
   // Common State
   const [fileData, setFileData] = useState<any[] | null>(null);
@@ -173,9 +173,6 @@ const App = () => {
   // Lunch State
   const [lunchViewMode, setLunchViewMode] = useState<'catraca' | 'retorno' | 'total' | 'leaders' | 'collaborators'>('catraca');
   const [lunchResults, setLunchResults] = useState<LunchResults | null>(null);
-
-  // Refs
-  const logoInputRef = useRef<HTMLInputElement>(null);
 
   // --- HELPERS ---
   const timeToSeconds = (timeStr: string): number => {
@@ -340,14 +337,6 @@ const App = () => {
   }, [selectedDate, selectedLeader, selectedCollaborator]); // Re-run on Leader/Colab change too
 
   // --- HANDLERS ---
-
-  const handleLogoUpload = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      const url = URL.createObjectURL(file);
-      setLogoUrl(url);
-    }
-  };
 
   const handleFileUpload = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -788,25 +777,8 @@ const App = () => {
             <div className="w-full">
                 {/* Header with Logo on Home */}
                 <div className="flex items-center justify-center mb-12 gap-4">
-                    <div className="relative group">
-                        <input 
-                            type="file" 
-                            ref={logoInputRef}
-                            accept="image/*" 
-                            onChange={handleLogoUpload} 
-                            className="hidden"
-                        />
-                        <div 
-                            className="w-24 h-24 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden cursor-pointer hover:border-blue-400 transition-colors shadow-sm"
-                            onClick={() => logoInputRef.current?.click()}
-                            title="Clique para adicionar logo"
-                        >
-                            {logoUrl ? (
-                                <img src={logoUrl} alt="Logo Empresa" className="w-full h-full object-contain" />
-                            ) : (
-                                <ImageIcon className="text-slate-300" size={32} />
-                            )}
-                        </div>
+                    <div className="w-24 h-24 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden shadow-sm">
+                        <img src={logoUrl} alt="Logo Empresa" className="w-full h-full object-contain" />
                     </div>
                     <div className="text-left">
                         <h1 className="text-4xl font-bold text-slate-800 mb-2">Portal de Análise Operacional</h1>
@@ -850,25 +822,8 @@ const App = () => {
         <header className="mb-8 border-b border-slate-200 pb-4 flex flex-col md:flex-row justify-between items-center w-full gap-4">
           <div className="flex items-center gap-4">
              {/* LOGO AREA (Smaller in dashboard) */}
-             <div className="relative group">
-                 <input 
-                    type="file" 
-                    ref={logoInputRef}
-                    accept="image/*" 
-                    onChange={handleLogoUpload} 
-                    className="hidden"
-                 />
-                 <div 
-                    className="w-14 h-14 rounded-lg bg-white border border-slate-200 flex items-center justify-center overflow-hidden cursor-pointer hover:border-blue-400 transition-colors"
-                    onClick={() => logoInputRef.current?.click()}
-                    title="Clique para alterar logo"
-                 >
-                     {logoUrl ? (
-                         <img src={logoUrl} alt="Logo" className="w-full h-full object-contain" />
-                     ) : (
-                         <ImageIcon className="text-slate-300" size={20} />
-                     )}
-                 </div>
+             <div className="w-14 h-14 rounded-lg bg-white border border-slate-200 flex items-center justify-center overflow-hidden">
+                 <img src={logoUrl} alt="Logo" className="w-full h-full object-contain" />
              </div>
 
              <div>

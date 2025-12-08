@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent, useMemo, useEffect } from 'react';
-import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Users, RefreshCcw, Eye, ShieldAlert, Timer, ArrowRight, Settings, Coffee, Clock, Filter, BarChart, Percent, TrendingUp, Calendar, Image as ImageIcon, ArrowUp, ArrowDown, User } from 'lucide-react';
+import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Users, RefreshCcw, Eye, ShieldAlert, Timer, ArrowRight, Settings, Coffee, Clock, Filter, BarChart, Percent, TrendingUp, Calendar, ArrowUp, ArrowDown, User } from 'lucide-react';
 
 // --- INTERFACES (TIPAGENS) ---
 

@@ -1,5 +1,5 @@
-import { useState, type ChangeEvent, useMemo, useEffect } from 'react';
-import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Users, RefreshCcw, Eye, ShieldAlert, Timer, ArrowRight, Settings, Coffee, Clock, Filter, BarChart, Percent, TrendingUp, Calendar, ArrowUp, ArrowDown, User } from 'lucide-react';
+import { useState, type ChangeEvent, useMemo, useEffect, useRef } from 'react';
+import { Upload, FileText, AlertTriangle, CheckCircle, BarChart2, Users, RefreshCcw, Eye, ShieldAlert, Timer, ArrowRight, Settings, Coffee, Clock, Filter, BarChart, Percent, TrendingUp, Calendar, Image as ImageIcon, ArrowUp, ArrowDown, User, Grid } from 'lucide-react';
 
 // --- INTERFACES (TIPAGENS) ---
 
@@ -38,6 +38,7 @@ interface SetupRow {
   isStrongFinishOffender: boolean;
   sfReason: string;
   diffExitSec: number;
+  diffExitFormatted: string;
 }
 
 interface LunchRow {
@@ -96,6 +97,15 @@ interface GlobalStats {
   totalCollaborators: number;
 }
 
+// Interface para Visão Diária (Matriz)
+interface DailyViewRow {
+    nome: string;
+    teamLeader: string;
+    days: Record<string, string>; 
+    average: string; 
+    averageSec: number; 
+}
+
 interface SetupResults {
   fastStart: SetupRow[];
   strongFinish: SetupRow[];
@@ -103,6 +113,8 @@ interface SetupResults {
   collaborators: CollaboratorStat[]; 
   allRows: SetupRow[];
   globalStats: GlobalStats;
+  dailyView?: DailyViewRow[];
+  dailyColumns?: string[];
 }
 
 interface LunchResults {
@@ -113,12 +125,14 @@ interface LunchResults {
   collaborators: CollaboratorStat[]; 
   allRows: LunchRow[];
   globalStats: GlobalStats;
+  dailyView?: DailyViewRow[]; 
+  dailyColumns?: string[];
 }
 
 interface PerformanceResults {
     individual: PerformanceRow[];
     leaders: LeaderStat[];
-    collaborators: CollaboratorStat[]; 
+    collaborators: CollaboratorStat[];
     indirects: PerformanceRow[];
     globalStats: GlobalStats;
 }
@@ -145,7 +159,7 @@ const SortableHeader = ({ label, sortKey, currentSort, onSort, className = "" }:
 const App = () => {
   // Global State
   const [appMode, setAppMode] = useState<'performance' | 'setup' | 'lunch' | null>(null);
-  const logoUrl = 'https://i.imgur.com/NXiCMsQ.png';
+  const [logoUrl, setLogoUrl] = useState<string | null>('https://i.imgur.com/NXiCMsQ.png'); 
   
   // Common State
   const [fileData, setFileData] = useState<any[] | null>(null);
@@ -158,6 +172,9 @@ const App = () => {
   const [selectedCollaborator, setSelectedCollaborator] = useState<string>('Todos');
   const [selectedDate, setSelectedDate] = useState<string>('Todos');
   
+  // Daily View Filter
+  const [dailyMetric, setDailyMetric] = useState<string>('default');
+
   // Sort State
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: '', direction: 'asc' });
 
@@ -167,12 +184,15 @@ const App = () => {
   const [perfResults, setPerfResults] = useState<PerformanceResults | null>(null);
 
   // Setup State
-  const [setupViewMode, setSetupViewMode] = useState<'fast_start' | 'strong_finish' | 'leaders' | 'collaborators'>('fast_start');
+  const [setupViewMode, setSetupViewMode] = useState<'fast_start' | 'strong_finish' | 'leaders' | 'collaborators' | 'daily'>('fast_start');
   const [setupResults, setSetupResults] = useState<SetupResults | null>(null);
 
   // Lunch State
-  const [lunchViewMode, setLunchViewMode] = useState<'catraca' | 'retorno' | 'total' | 'leaders' | 'collaborators'>('catraca');
+  const [lunchViewMode, setLunchViewMode] = useState<'catraca' | 'retorno' | 'total' | 'leaders' | 'collaborators' | 'daily'>('catraca');
   const [lunchResults, setLunchResults] = useState<LunchResults | null>(null);
+
+  // Refs
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   // --- HELPERS ---
   const timeToSeconds = (timeStr: string): number => {
@@ -281,6 +301,12 @@ const App = () => {
 
           if (typeof valA === 'string') valA = valA.toLowerCase();
           if (typeof valB === 'string') valB = valB.toLowerCase();
+          
+          if (sortConfig.key.startsWith('days.')) {
+             const dayKey = sortConfig.key.split('.')[1];
+             valA = a.days[dayKey] || '';
+             valB = b.days[dayKey] || '';
+          }
 
           if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
           if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
@@ -325,6 +351,7 @@ const App = () => {
     return sortData(filtered);
   };
 
+  // Re-run analysis on Date/Filter change OR Metric Change
   useEffect(() => {
     if (!fileData) return;
     if (appMode === 'performance' && granularity) {
@@ -334,9 +361,17 @@ const App = () => {
     } else if (appMode === 'lunch') {
         analyzeLunch(fileData);
     }
-  }, [selectedDate, selectedLeader, selectedCollaborator]); // Re-run on Leader/Colab change too
+  }, [selectedDate, dailyMetric]);
 
   // --- HANDLERS ---
+
+  const handleLogoUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setLogoUrl(url);
+    }
+  };
 
   const handleFileUpload = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -370,6 +405,40 @@ const App = () => {
       }
     };
     reader.readAsText(file);
+  };
+
+  // --- HELPER FOR DAILY VIEW ---
+  const buildDailyView = (data: any[], metricKey: string, timeValueKey?: string) => {
+      const days = Array.from(new Set(data.map(d => d.periodo))).sort();
+      const grouped: Record<string, DailyViewRow> = {};
+
+      data.forEach(row => {
+          if (!grouped[row.nome]) {
+              grouped[row.nome] = { nome: row.nome, teamLeader: row.teamLeader, days: {}, average: '', averageSec: 0 };
+          }
+          
+          let value = row[metricKey];
+          grouped[row.nome].days[row.periodo] = value;
+      });
+
+      Object.values(grouped).forEach(g => {
+          let sum = 0;
+          let count = 0;
+          days.forEach(d => {
+             const row = data.find(r => r.nome === g.nome && r.periodo === d);
+             if (row && timeValueKey) {
+                 sum += row[timeValueKey];
+                 count++;
+             }
+          });
+          if (count > 0) {
+              const avg = sum / count;
+              g.averageSec = avg;
+              g.average = secondsToTime(avg);
+          }
+      });
+
+      return { rows: Object.values(grouped), columns: days };
   };
 
   // --- PARSERS ---
@@ -425,6 +494,7 @@ const App = () => {
       const IDX_PRIMEIRO_BIP = findIndex(['PRIMEIRO BIP']);
       const IDX_TEMPO_BIP_ENTRADA = findIndex(['TEMPO DE BIP ENTRADA']);
       
+      // CORREÇÃO: Busca exata ou que NÃO contenha PENULTIMO/DIFF
       const IDX_ULTIMO_BIP = headers.findIndex(h => h.includes('ULTIMO BIP') && !h.includes('PENULTIMO') && !h.includes('DIFF'));
       
       const IDX_TARGET_SAIDA = findIndex(['DATETIME TARGET SAIDA', 'TARGET SAIDA']); 
@@ -459,8 +529,10 @@ const App = () => {
                 if (diffMins > 5) { isStrongFinishOffender = true; sfReason = 'Demora na saída (>5min)'; }
             }
         }
+        
+        const diffExitFormatted = secondsToTime(diffExitSec);
 
-        return { id: index, periodo, nome, teamLeader, clockIn, primeiroBip, tempoBipEntrada, tempoBipEntradaSec, isFastStartOffender, ultimoBipRaw, targetSaidaRaw, clockOutRaw, isStrongFinishOffender, sfReason, diffExitSec };
+        return { id: index, periodo, nome, teamLeader, clockIn, primeiroBip, tempoBipEntrada, tempoBipEntradaSec, isFastStartOffender, ultimoBipRaw, targetSaidaRaw, clockOutRaw, isStrongFinishOffender, sfReason, diffExitSec, diffExitFormatted };
       }).filter((item): item is SetupRow => item !== null);
 
       if (parsedData.length === 0) { alert("Nenhum dado válido."); return null; }
@@ -514,7 +586,6 @@ const App = () => {
     setGranularity(mode);
     if (!fileData) return;
     
-    // 1. FILTERING DATA FIRST
     let data = fileData as PerformanceRow[];
     if (selectedDate !== 'Todos') {
         data = data.filter(r => r.periodo === selectedDate);
@@ -542,12 +613,12 @@ const App = () => {
       globalSumProd += row.prodLiq || 0;
       allCollabsSet.add(row.nome);
 
-      // Individual Aggregation
+      // Individual Aggregation for Ranking table
       if (!users[row.nome]) { users[row.nome] = { ...row, totalRows: 0, totalOffenses: 0, history: [] }; }
       const user = users[row.nome];
       if (user.totalRows !== undefined) user.totalRows++;
 
-      // Collaborator Stats Aggregation
+      // Collaborator Stats Aggregation (For Detailed View)
       if (!collabStats[row.nome]) { collabStats[row.nome] = { sumProd: 0, count: 0, teamLeader: row.teamLeader }; }
       collabStats[row.nome].sumProd += row.prodLiq || 0;
       collabStats[row.nome].count++;
@@ -609,13 +680,16 @@ const App = () => {
   };
 
   const analyzeSetup = (rawData: SetupRow[]) => {
+      // Base data (Filtered by Date if NOT 'Todos', needed for Daily View)
+      // But we also need to respect Leader filter for global stats
       let data = rawData;
-      if (selectedDate !== 'Todos') {
-          data = data.filter(r => r.periodo === selectedDate);
-      }
-      if (selectedLeader !== 'Todos') {
-          data = data.filter(r => r.teamLeader === selectedLeader);
-      }
+      // We pass the FULL dataset to buildDailyView, but filtered by Leader? 
+      // If user filters Leader, Daily View should show only that leader's team.
+      // Date filter 'Todos' shows all dates. Specific date shows 1 col.
+      
+      // Apply filters for calculations
+      if (selectedDate !== 'Todos') { data = data.filter(r => r.periodo === selectedDate); }
+      if (selectedLeader !== 'Todos') { data = data.filter(r => r.teamLeader === selectedLeader); }
 
       const fsOffenders = data.filter(d => d.isFastStartOffender);
       const sfOffenders = data.filter(d => d.isStrongFinishOffender);
@@ -684,7 +758,14 @@ const App = () => {
           totalCollaborators: allCollabsSet.size
       };
 
-      setSetupResults({ fastStart: fsOffenders.sort((a,b) => b.tempoBipEntradaSec - a.tempoBipEntradaSec), strongFinish: sfOffenders, leaders: leaderRanking, collaborators: collabRanking, allRows: data, globalStats });
+      // For Daily View: We need to use 'data' which is already filtered
+      let metricKey = 'tempoBipEntrada';
+      let metricSecKey = 'tempoBipEntradaSec';
+      if (dailyMetric === 'strong_finish') { metricKey = 'diffExitFormatted'; metricSecKey = 'diffExitSec'; } 
+      
+      const { rows: dailyRows, columns: dailyCols } = buildDailyView(data, metricKey, metricSecKey);
+
+      setSetupResults({ fastStart: fsOffenders.sort((a,b) => b.tempoBipEntradaSec - a.tempoBipEntradaSec), strongFinish: sfOffenders, leaders: leaderRanking, collaborators: collabRanking, allRows: data, globalStats, dailyView: dailyRows, dailyColumns: dailyCols });
   };
 
   const analyzeLunch = (rawData: LunchRow[]) => {
@@ -751,21 +832,44 @@ const App = () => {
           avgRetorno: stats.countRetorno > 0 ? stats.sumRetorno / stats.countRetorno : 0
       })).sort((a, b) => (b.avgCatraca || 0) - (a.avgCatraca || 0));
 
+      // Calculate GLOBAL STATS based on Current Filter (Leader)
+      let filteredForGlobal = data;
+      if (selectedLeader !== 'Todos') {
+          filteredForGlobal = data.filter(r => r.teamLeader === selectedLeader);
+      }
+
+      let filteredGlobalSumCatraca = 0; let filteredGlobalCountCatraca = 0;
+      let filteredGlobalSumRetorno = 0; let filteredGlobalCountRetorno = 0;
+      const filteredAllCollabsSet = new Set<string>();
+
+      filteredForGlobal.forEach(row => {
+          filteredAllCollabsSet.add(row.nome);
+          if (row.tempoCatracaSec > 0) { filteredGlobalSumCatraca += row.tempoCatracaSec; filteredGlobalCountCatraca++; }
+          if (row.diffRetornoSec > 0) { filteredGlobalSumRetorno += row.diffRetornoSec; filteredGlobalCountRetorno++; }
+      });
+
       const globalStats: GlobalStats = {
-          avgCatraca: globalCountCatraca > 0 ? globalSumCatraca / globalCountCatraca : 0,
-          avgRetorno: globalCountRetorno > 0 ? globalSumRetorno / globalCountRetorno : 0,
-          totalCollaborators: allCollabsSet.size
+          avgCatraca: filteredGlobalCountCatraca > 0 ? filteredGlobalSumCatraca / filteredGlobalCountCatraca : 0,
+          avgRetorno: filteredGlobalCountRetorno > 0 ? filteredGlobalSumRetorno / filteredGlobalCountRetorno : 0,
+          totalCollaborators: filteredAllCollabsSet.size
       };
 
-      setLunchResults({ catraca: catracaOffenders.sort((a,b) => b.tempoCatracaSec - a.tempoCatracaSec), retorno: retornoOffenders.sort((a,b) => b.diffRetornoSec - a.diffRetornoSec), totalInterval: totalIntervalOffenders.sort((a,b) => b.totalIntervalSec - a.totalIntervalSec), leaders: leaderRanking, collaborators: collabRanking, allRows: data, globalStats });
+      let metricKey = 'tempoCatracaRaw'; 
+      let metricSecKey = 'tempoCatracaSec';
+      if (dailyMetric === 'retorno') { metricKey = 'diffRetornoFormatted'; metricSecKey = 'diffRetornoSec'; }
+      
+      const { rows: dailyRows, columns: dailyCols } = buildDailyView(data, metricKey, metricSecKey);
+
+      setLunchResults({ catraca: catracaOffenders.sort((a,b) => b.tempoCatracaSec - a.tempoCatracaSec), retorno: retornoOffenders.sort((a,b) => b.diffRetornoSec - a.diffRetornoSec), totalInterval: totalIntervalOffenders.sort((a,b) => b.totalIntervalSec - a.totalIntervalSec), leaders: leaderRanking, collaborators: collabRanking, allRows: data, globalStats, dailyView: dailyRows, dailyColumns: dailyCols });
   };
 
   const reset = () => {
     setFileData(null); setFileName(''); setPerfResults(null); setSetupResults(null); setLunchResults(null);
     setSelectedLeader('Todos'); setSelectedCollaborator('Todos'); setSelectedDate('Todos');
+    setDailyMetric('default'); // Reset daily metric
     setPerfViewMode('performance'); setSetupViewMode('fast_start'); setLunchViewMode('catraca'); setAppMode(null); 
   };
-  const softReset = () => { setFileData(null); setFileName(''); setPerfResults(null); setSetupResults(null); setLunchResults(null); setSelectedLeader('Todos'); setSelectedCollaborator('Todos'); setSelectedDate('Todos'); }
+  const softReset = () => { setFileData(null); setFileName(''); setPerfResults(null); setSetupResults(null); setLunchResults(null); setSelectedLeader('Todos'); setSelectedCollaborator('Todos'); setSelectedDate('Todos'); setDailyMetric('default'); }
   const GlobalStyle = () => ( <style>{` html, body { margin: 0; padding: 0; width: 100%; height: 100%; background-color: #f8fafc; } #root { width: 100%; height: 100%; } `}</style> );
 
   // --- RENDER ---
@@ -777,8 +881,25 @@ const App = () => {
             <div className="w-full">
                 {/* Header with Logo on Home */}
                 <div className="flex items-center justify-center mb-12 gap-4">
-                    <div className="w-24 h-24 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden shadow-sm">
-                        <img src={logoUrl} alt="Logo Empresa" className="w-full h-full object-contain" />
+                    <div className="relative group">
+                        <input 
+                            type="file" 
+                            ref={logoInputRef}
+                            accept="image/*" 
+                            onChange={handleLogoUpload} 
+                            className="hidden"
+                        />
+                        <div 
+                            className="w-24 h-24 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden cursor-pointer hover:border-blue-400 transition-colors shadow-sm"
+                            onClick={() => logoInputRef.current?.click()}
+                            title="Clique para adicionar logo"
+                        >
+                            {logoUrl ? (
+                                <img src={logoUrl} alt="Logo Empresa" className="w-full h-full object-contain" />
+                            ) : (
+                                <ImageIcon className="text-slate-300" size={32} />
+                            )}
+                        </div>
                     </div>
                     <div className="text-left">
                         <h1 className="text-4xl font-bold text-slate-800 mb-2">Portal de Análise Operacional</h1>
@@ -822,8 +943,25 @@ const App = () => {
         <header className="mb-8 border-b border-slate-200 pb-4 flex flex-col md:flex-row justify-between items-center w-full gap-4">
           <div className="flex items-center gap-4">
              {/* LOGO AREA (Smaller in dashboard) */}
-             <div className="w-14 h-14 rounded-lg bg-white border border-slate-200 flex items-center justify-center overflow-hidden">
-                 <img src={logoUrl} alt="Logo" className="w-full h-full object-contain" />
+             <div className="relative group">
+                 <input 
+                    type="file" 
+                    ref={logoInputRef}
+                    accept="image/*" 
+                    onChange={handleLogoUpload} 
+                    className="hidden"
+                 />
+                 <div 
+                    className="w-14 h-14 rounded-lg bg-white border border-slate-200 flex items-center justify-center overflow-hidden cursor-pointer hover:border-blue-400 transition-colors"
+                    onClick={() => logoInputRef.current?.click()}
+                    title="Clique para alterar logo"
+                 >
+                     {logoUrl ? (
+                         <img src={logoUrl} alt="Logo" className="w-full h-full object-contain" />
+                     ) : (
+                         <ImageIcon className="text-slate-300" size={20} />
+                     )}
+                 </div>
              </div>
 
              <div>
@@ -941,11 +1079,11 @@ const App = () => {
                          {/* GLOBAL STATS CARD */}
                         <div className="bg-white p-6 rounded-xl shadow-sm border border-blue-100 flex flex-wrap gap-8 items-center justify-between">
                             <div>
-                                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Base Analisada</h3>
+                                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Base Analisada (Filtro Atual)</h3>
                                 <p className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Users className="text-blue-500"/> {perfResults.globalStats.totalCollaborators} <span className="text-sm font-normal text-slate-400">colaboradores</span></p>
                             </div>
                             <div>
-                                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Média Produtividade</h3>
+                                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Média Produtividade (Geral)</h3>
                                 <p className="text-2xl font-bold text-slate-800">{(perfResults.globalStats.avgProd || 0).toFixed(2)}</p>
                             </div>
                              <div className="h-10 w-px bg-slate-200 hidden md:block"></div>
@@ -976,8 +1114,8 @@ const App = () => {
                                             <tr>
                                                 <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort}/>
                                                 <SortableHeader label="Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
-                                                <SortableHeader label="Seq. Dias Falhas" sortKey="maxStreak" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
-                                                <SortableHeader label="Total de Falhas" sortKey="totalOffenses" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                                <SortableHeader label="Maior Seq." sortKey="maxStreak" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
+                                                <SortableHeader label="Falhas" sortKey="totalOffenses" currentSort={sortConfig} onSort={handleSort} className="text-center"/>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">{applyFilters(perfResults.individual).map((u, i) => (<tr key={i} className="hover:bg-slate-50"><td className="px-6 py-4 font-medium">{u.nome}</td><td className="px-6 py-4 text-slate-500">{u.teamLeader}</td><td className="px-6 py-4 text-center"><span className="bg-red-100 text-red-700 px-2 py-1 rounded font-bold">{u.maxStreak}</span></td><td className="px-6 py-4 text-center font-bold">{u.totalOffenses}</td></tr>))}</tbody>
@@ -1103,7 +1241,7 @@ const App = () => {
                 {/* GLOBAL STATS CARD */}
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-purple-100 flex flex-wrap gap-8 items-center justify-between">
                     <div>
-                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Base Analisada</h3>
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Base Analisada (Filtro Atual)</h3>
                         <p className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Users className="text-purple-500"/> {setupResults.globalStats.totalCollaborators} <span className="text-sm font-normal text-slate-400">colaboradores</span></p>
                     </div>
                     <div>
@@ -1133,10 +1271,11 @@ const App = () => {
                 )}
                 
                 <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 w-full mt-4">
-                    <button onClick={() => setSetupViewMode('fast_start')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'fast_start' ? 'border-red-500 text-red-600 bg-red-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Timer size={18}/> Fast Start <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(setupResults.fastStart).length}</span></button>
-                    <button onClick={() => setSetupViewMode('strong_finish')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'strong_finish' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><CheckCircle size={18}/> Strong Finish <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(setupResults.strongFinish).length}</span></button>
-                    <button onClick={() => setSetupViewMode('leaders')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'leaders' ? 'border-purple-500 text-purple-600 bg-purple-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><BarChart size={18}/> Visão de Líderes</button>
-                    <button onClick={() => setSetupViewMode('collaborators')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'collaborators' ? 'border-blue-400 text-blue-500' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><User size={18}/> Visão Detalhada</button>
+                    <button onClick={() => setSetupViewMode('fast_start')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'fast_start' ? 'border-red-500 text-red-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Timer size={18}/> Fast Start <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(setupResults.fastStart).length}</span></button>
+                    <button onClick={() => setSetupViewMode('strong_finish')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'strong_finish' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><CheckCircle size={18}/> Strong Finish <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(setupResults.strongFinish).length}</span></button>
+                    <button onClick={() => setSetupViewMode('leaders')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'leaders' ? 'border-purple-500 text-purple-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><BarChart size={18}/> Visão de Líderes</button>
+                    <button onClick={() => setSetupViewMode('collaborators')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'collaborators' ? 'border-blue-400 text-blue-500' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><User size={18}/> Visão Detalhada</button>
+                    <button onClick={() => setSetupViewMode('daily')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${setupViewMode === 'daily' ? 'border-green-500 text-green-600' : 'border-transparent text-slate-500'}`}><Grid size={18}/> Visão Diária (Matriz)</button>
                 </div>
 
                 {setupViewMode === 'fast_start' && (
@@ -1234,6 +1373,55 @@ const App = () => {
                         </table>
                     </div>
                 )}
+                {/* NEW DAILY VIEW (MATRIX) */}
+                {setupViewMode === 'daily' && setupResults.dailyView && (
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
+                        <div className="p-4 bg-green-50 text-green-800 text-sm border-b border-green-100 flex items-center justify-between">
+                             <div className="flex items-center gap-4">
+                                <span className="font-bold flex items-center gap-2"><Grid size={16}/> Acompanhamento Diário</span>
+                                <div className="flex items-center gap-2 text-xs bg-white px-2 py-1 rounded border border-green-200">
+                                    <span>Métrica:</span>
+                                    <select 
+                                        value={dailyMetric} 
+                                        onChange={(e) => setDailyMetric(e.target.value)}
+                                        className="bg-transparent font-bold outline-none text-green-700"
+                                    >
+                                        <option value="default">Tempo 1º Bip (Fast Start)</option>
+                                        <option value="strong_finish">Desvio Saída (Strong Finish)</option>
+                                    </select>
+                                </div>
+                             </div>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm whitespace-nowrap">
+                                <thead className="bg-slate-100 text-slate-600">
+                                    <tr>
+                                        <th className="px-4 py-3 sticky left-0 bg-slate-100 z-10 shadow-sm">Colaborador</th>
+                                        <th className="px-4 py-3">Team Leader</th>
+                                        {setupResults.dailyColumns?.map(day => (
+                                            <th key={day} className="px-4 py-3 text-center">{day}</th>
+                                        ))}
+                                        <th className="px-4 py-3 text-center font-bold bg-slate-200">Média</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {applyFilters(setupResults.dailyView).map((row, i) => (
+                                        <tr key={i} className="hover:bg-slate-50">
+                                            <td className="px-4 py-3 font-medium text-slate-800 sticky left-0 bg-white z-10 shadow-sm border-r border-slate-100">{row.nome}</td>
+                                            <td className="px-4 py-3 text-slate-500">{row.teamLeader}</td>
+                                            {setupResults.dailyColumns?.map(day => (
+                                                <td key={day} className="px-4 py-3 text-center font-mono text-xs text-slate-600">
+                                                    {row.days[day] || '-'}
+                                                </td>
+                                            ))}
+                                            <td className="px-4 py-3 text-center font-bold text-green-700 bg-green-50 font-mono">{row.average}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
             </div>
         )}
 
@@ -1249,7 +1437,7 @@ const App = () => {
                 {/* GLOBAL STATS CARD */}
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-orange-100 flex flex-wrap gap-8 items-center justify-between">
                     <div>
-                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Base Analisada</h3>
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Base Analisada (Filtro Atual)</h3>
                         <p className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Users className="text-orange-500"/> {lunchResults.globalStats.totalCollaborators} <span className="text-sm font-normal text-slate-400">colaboradores</span></p>
                     </div>
                     <div>
@@ -1264,17 +1452,18 @@ const App = () => {
 
                 {/* Tabs */}
                 <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 w-full mt-4">
-                    <button onClick={() => setLunchViewMode('catraca')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'catraca' ? 'border-red-500 text-red-600 bg-red-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                    <button onClick={() => setLunchViewMode('catraca')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'catraca' ? 'border-red-500 text-red-600 bg-red-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                         <Clock size={18}/> Excesso Catraca <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.catraca).length}</span>
                     </button>
-                    <button onClick={() => setLunchViewMode('retorno')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'retorno' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                    <button onClick={() => setLunchViewMode('retorno')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'retorno' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                         <Timer size={18}/> Atraso Retorno <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.retorno).length}</span>
                     </button>
-                    <button onClick={() => setLunchViewMode('total')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'total' ? 'border-yellow-500 text-yellow-600 bg-yellow-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                    <button onClick={() => setLunchViewMode('total')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'total' ? 'border-yellow-500 text-yellow-600 bg-yellow-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                         <TrendingUp size={18}/> Tempo Total {'>'} 1h10 <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.totalInterval).length}</span>
                     </button>
-                    <button onClick={() => setLunchViewMode('leaders')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'leaders' ? 'border-orange-500 text-orange-600 bg-orange-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><BarChart size={18}/> Visão de Líderes</button>
-                    <button onClick={() => setLunchViewMode('collaborators')} className={`px-6 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'collaborators' ? 'border-blue-400 text-blue-500' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><User size={18}/> Visão Detalhada</button>
+                    <button onClick={() => setLunchViewMode('leaders')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'leaders' ? 'border-orange-500 text-orange-600 bg-orange-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><BarChart size={18}/> Visão de Líderes</button>
+                    <button onClick={() => setLunchViewMode('collaborators')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'collaborators' ? 'border-blue-400 text-blue-500' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><User size={18}/> Visão Detalhada</button>
+                    <button onClick={() => setLunchViewMode('daily')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'daily' ? 'border-green-500 text-green-600' : 'border-transparent text-slate-500'}`}><Grid size={18}/> Visão Diária</button>
                 </div>
 
                 {/* View: Catraca */}
@@ -1435,6 +1624,56 @@ const App = () => {
                                 ))}
                             </tbody>
                         </table>
+                    </div>
+                )}
+                
+                {/* NEW DAILY VIEW (MATRIX) LUNCH */}
+                {lunchViewMode === 'daily' && lunchResults.dailyView && (
+                    <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
+                        <div className="p-4 bg-green-50 text-green-800 text-sm border-b border-green-100 flex items-center justify-between">
+                             <div className="flex items-center gap-4">
+                                <span className="font-bold flex items-center gap-2"><Grid size={16}/> Acompanhamento Diário de Intervalo</span>
+                                <div className="flex items-center gap-2 text-xs bg-white px-2 py-1 rounded border border-green-200">
+                                    <span>Métrica:</span>
+                                    <select 
+                                        value={dailyMetric} 
+                                        onChange={(e) => setDailyMetric(e.target.value)}
+                                        className="bg-transparent font-bold outline-none text-green-700"
+                                    >
+                                        <option value="default">Tempo Catraca</option>
+                                        <option value="retorno">Tempo Retorno (Gap)</option>
+                                    </select>
+                                </div>
+                             </div>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm whitespace-nowrap">
+                                <thead className="bg-slate-100 text-slate-600">
+                                    <tr>
+                                        <th className="px-4 py-3 sticky left-0 bg-slate-100 z-10 shadow-sm">Colaborador</th>
+                                        <th className="px-4 py-3">Team Leader</th>
+                                        {lunchResults.dailyColumns?.map(day => (
+                                            <th key={day} className="px-4 py-3 text-center">{day}</th>
+                                        ))}
+                                        <th className="px-4 py-3 text-center font-bold bg-slate-200">Média</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {applyFilters(lunchResults.dailyView).map((row, i) => (
+                                        <tr key={i} className="hover:bg-slate-50">
+                                            <td className="px-4 py-3 font-medium text-slate-800 sticky left-0 bg-white z-10 shadow-sm border-r border-slate-100">{row.nome}</td>
+                                            <td className="px-4 py-3 text-slate-500">{row.teamLeader}</td>
+                                            {lunchResults.dailyColumns?.map(day => (
+                                                <td key={day} className="px-4 py-3 text-center font-mono text-xs text-slate-600">
+                                                    {row.days[day] || '-'}
+                                                </td>
+                                            ))}
+                                            <td className="px-4 py-3 text-center font-bold text-green-700 bg-green-50 font-mono">{row.average}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 )}
             </div>

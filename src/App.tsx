@@ -564,8 +564,14 @@ const App = () => {
         const dateRetornoBip = parseDate(retornoBip);
 
         if (dateRetornoCatraca && dateRetornoBip) {
-            diffRetornoSec = getDifferenceInSeconds(dateRetornoBip, dateRetornoCatraca);
-            if (diffRetornoSec > 600) { isRetornoOffender = true; }
+            // CÁLCULO ATUALIZADO: Gap Puro (para lógica de ofensor) vs Métrica Visual (soma)
+            const gapOnly = getDifferenceInSeconds(dateRetornoBip, dateRetornoCatraca);
+            
+            // O cálculo solicitado: Tempo de Catraca + Tempo de Bip Retorno (Gap)
+            diffRetornoSec = tempoCatracaSec + gapOnly;
+            
+            // Mantendo a lógica de ofensor baseada apenas no atraso (caminhada), pois se usar a soma, todos seriam ofensores (> 600s)
+            if (gapOnly > 600) { isRetornoOffender = true; }
         }
         if (dateSaidaBip && dateRetornoBip) {
             totalIntervalSec = getDifferenceInSeconds(dateRetornoBip, dateSaidaBip);
@@ -1396,12 +1402,12 @@ const App = () => {
                             <table className="w-full text-left text-sm whitespace-nowrap">
                                 <thead className="bg-slate-100 text-slate-600">
                                     <tr>
-                                        <th className="px-4 py-3 sticky left-0 bg-slate-100 z-10 shadow-sm">Colaborador</th>
-                                        <th className="px-4 py-3">Team Leader</th>
+                                        <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort} className="sticky left-0 bg-slate-100 z-10 shadow-sm border-r border-slate-200"/>
+                                        <SortableHeader label="Team Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
                                         {setupResults.dailyColumns?.map(day => (
                                             <th key={day} className="px-4 py-3 text-center">{day}</th>
                                         ))}
-                                        <th className="px-4 py-3 text-center font-bold bg-slate-200">Média</th>
+                                        <SortableHeader label="Média" sortKey="averageSec" currentSort={sortConfig} onSort={handleSort} className="text-center font-bold bg-slate-200"/>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
@@ -1456,7 +1462,7 @@ const App = () => {
                         <Clock size={18}/> Excesso Catraca <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.catraca).length}</span>
                     </button>
                     <button onClick={() => setLunchViewMode('retorno')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'retorno' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                        <Timer size={18}/> Atraso Retorno <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.retorno).length}</span>
+                        <Timer size={18}/> Atraso Retorno (Gap + Catraca) <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.retorno).length}</span>
                     </button>
                     <button onClick={() => setLunchViewMode('total')} className={`px-4 py-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${lunchViewMode === 'total' ? 'border-yellow-500 text-yellow-600 bg-yellow-50' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                         <TrendingUp size={18}/> Tempo Total {'>'} 1h10 <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs ml-2">{applyFilters(lunchResults.totalInterval).length}</span>
@@ -1502,7 +1508,7 @@ const App = () => {
                 {lunchViewMode === 'retorno' && (
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-blue-50 text-blue-800 text-sm border-b border-blue-100 flex items-center gap-2">
-                            <AlertTriangle size={16}/> Atraso entre <strong>Catraca e Operação (BIP) {'>'} 10:00</strong>
+                            <AlertTriangle size={16}/> Gap de Retorno (Catraca + Caminhada) <strong>(Caminhada {'>'} 10:00)</strong>
                         </div>
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-100 text-slate-600">
@@ -1511,7 +1517,7 @@ const App = () => {
                                     <SortableHeader label="Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
                                     <SortableHeader label="Retorno Catraca" sortKey="retornoCatraca" currentSort={sortConfig} onSort={handleSort}/>
                                     <SortableHeader label="Retorno BIP" sortKey="retornoBip" currentSort={sortConfig} onSort={handleSort}/>
-                                    <SortableHeader label="Diferença (Atraso)" sortKey="diffRetornoFormatted" currentSort={sortConfig} onSort={handleSort} className="text-right"/>
+                                    <SortableHeader label="Tempo (Catraca + Gap)" sortKey="diffRetornoFormatted" currentSort={sortConfig} onSort={handleSort} className="text-right"/>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -1641,7 +1647,7 @@ const App = () => {
                                         className="bg-transparent font-bold outline-none text-green-700"
                                     >
                                         <option value="default">Tempo Catraca</option>
-                                        <option value="retorno">Tempo Retorno (Gap)</option>
+                                        <option value="retorno">Tempo Retorno (Gap + Catraca)</option>
                                     </select>
                                 </div>
                              </div>
@@ -1650,12 +1656,12 @@ const App = () => {
                             <table className="w-full text-left text-sm whitespace-nowrap">
                                 <thead className="bg-slate-100 text-slate-600">
                                     <tr>
-                                        <th className="px-4 py-3 sticky left-0 bg-slate-100 z-10 shadow-sm">Colaborador</th>
-                                        <th className="px-4 py-3">Team Leader</th>
+                                        <SortableHeader label="Colaborador" sortKey="nome" currentSort={sortConfig} onSort={handleSort} className="sticky left-0 bg-slate-100 z-10 shadow-sm border-r border-slate-200"/>
+                                        <SortableHeader label="Team Leader" sortKey="teamLeader" currentSort={sortConfig} onSort={handleSort}/>
                                         {lunchResults.dailyColumns?.map(day => (
                                             <th key={day} className="px-4 py-3 text-center">{day}</th>
                                         ))}
-                                        <th className="px-4 py-3 text-center font-bold bg-slate-200">Média</th>
+                                        <SortableHeader label="Média" sortKey="averageSec" currentSort={sortConfig} onSort={handleSort} className="text-center font-bold bg-slate-200"/>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">

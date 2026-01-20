@@ -75,11 +75,10 @@ interface LeaderStat {
   avgRetorno?: number;     
 }
 
-// Interface para Visão Detalhada de Colaborador (Médias)
 interface CollaboratorStat {
     nome: string;
     teamLeader: string;
-    count: number; // Quantas vezes apareceu na base filtrada
+    count: number;
     avgProd?: number;
     avgFirstBip?: number;
     avgExitDiff?: number;
@@ -87,7 +86,6 @@ interface CollaboratorStat {
     avgRetorno?: number;
 }
 
-// Stats globais para exibição no topo
 interface GlobalStats {
   avgProd?: number;
   avgFirstBip?: number;
@@ -97,11 +95,16 @@ interface GlobalStats {
   totalCollaborators: number;
 }
 
-// Interface para Visão Diária (Matriz)
+// Interface para Visão Diária (Matriz) - ATUALIZADA para conter valor numérico
+interface DailyCellValue {
+    formatted: string;
+    seconds: number;
+}
+
 interface DailyViewRow {
     nome: string;
     teamLeader: string;
-    days: Record<string, string>; 
+    days: Record<string, DailyCellValue>; 
     average: string; 
     averageSec: number; 
 }
@@ -304,8 +307,9 @@ const App = () => {
           
           if (sortConfig.key.startsWith('days.')) {
              const dayKey = sortConfig.key.split('.')[1];
-             valA = a.days[dayKey] || '';
-             valB = b.days[dayKey] || '';
+             // Agora o valor no objeto days é { formatted, seconds }
+             valA = a.days[dayKey]?.seconds || 0;
+             valB = b.days[dayKey]?.seconds || 0;
           }
 
           if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
@@ -407,8 +411,8 @@ const App = () => {
     reader.readAsText(file);
   };
 
-  // --- HELPER FOR DAILY VIEW ---
-  const buildDailyView = (data: any[], metricKey: string, timeValueKey?: string) => {
+  // --- HELPER FOR DAILY VIEW (ATUALIZADO) ---
+  const buildDailyView = (data: any[], metricKey: string, timeValueKey: string) => {
       const days = Array.from(new Set(data.map(d => d.periodo))).sort();
       const grouped: Record<string, DailyViewRow> = {};
 
@@ -417,8 +421,14 @@ const App = () => {
               grouped[row.nome] = { nome: row.nome, teamLeader: row.teamLeader, days: {}, average: '', averageSec: 0 };
           }
           
-          let value = row[metricKey];
-          grouped[row.nome].days[row.periodo] = value;
+          // Armazena tanto o texto formatado quanto os segundos
+          const textVal = row[metricKey];
+          const secVal = row[timeValueKey] || 0;
+          
+          grouped[row.nome].days[row.periodo] = {
+              formatted: textVal,
+              seconds: secVal
+          };
       });
 
       Object.values(grouped).forEach(g => {
@@ -494,7 +504,6 @@ const App = () => {
       const IDX_PRIMEIRO_BIP = findIndex(['PRIMEIRO BIP']);
       const IDX_TEMPO_BIP_ENTRADA = findIndex(['TEMPO DE BIP ENTRADA']);
       
-      // CORREÇÃO: Busca exata ou que NÃO contenha PENULTIMO/DIFF
       const IDX_ULTIMO_BIP = headers.findIndex(h => h.includes('ULTIMO BIP') && !h.includes('PENULTIMO') && !h.includes('DIFF'));
       
       const IDX_TARGET_SAIDA = findIndex(['DATETIME TARGET SAIDA', 'TARGET SAIDA']); 
@@ -564,13 +573,12 @@ const App = () => {
         const dateRetornoBip = parseDate(retornoBip);
 
         if (dateRetornoCatraca && dateRetornoBip) {
-            // CÁLCULO ATUALIZADO: Gap Puro (para lógica de ofensor) vs Métrica Visual (soma)
+            // Gap Puro (para lógica de ofensor - caminhada > 10 min)
             const gapOnly = getDifferenceInSeconds(dateRetornoBip, dateRetornoCatraca);
             
-            // O cálculo solicitado: Tempo de Catraca + Tempo de Bip Retorno (Gap)
+            // Cálculo solicitado: Tempo de Catraca + Tempo de Bip Retorno (Gap)
             diffRetornoSec = tempoCatracaSec + gapOnly;
             
-            // Mantendo a lógica de ofensor baseada apenas no atraso (caminhada), pois se usar a soma, todos seriam ofensores (> 600s)
             if (gapOnly > 600) { isRetornoOffender = true; }
         }
         if (dateSaidaBip && dateRetornoBip) {
@@ -596,11 +604,9 @@ const App = () => {
     if (selectedDate !== 'Todos') {
         data = data.filter(r => r.periodo === selectedDate);
     }
-    // Filter by Leader/Colab at DATA level before calc stats
     if (selectedLeader !== 'Todos') {
         data = data.filter(r => r.teamLeader === selectedLeader);
     }
-    // We don't filter by collaborator here for GLOBAL stats, but we will for the table
 
     const indirects = data.filter(row => row.isIndirect);
 
@@ -619,17 +625,14 @@ const App = () => {
       globalSumProd += row.prodLiq || 0;
       allCollabsSet.add(row.nome);
 
-      // Individual Aggregation for Ranking table
       if (!users[row.nome]) { users[row.nome] = { ...row, totalRows: 0, totalOffenses: 0, history: [] }; }
       const user = users[row.nome];
       if (user.totalRows !== undefined) user.totalRows++;
 
-      // Collaborator Stats Aggregation (For Detailed View)
       if (!collabStats[row.nome]) { collabStats[row.nome] = { sumProd: 0, count: 0, teamLeader: row.teamLeader }; }
       collabStats[row.nome].sumProd += row.prodLiq || 0;
       collabStats[row.nome].count++;
       
-      // Leader Stats Aggregation
       if (row.teamLeader) {
           if (!leadersStats[row.teamLeader]) { leadersStats[row.teamLeader] = { totalImpact: 0, totalRows: 0, sumProd: 0, offendersSet: new Set(), allPeopleSet: new Set() }; }
           const stats = leadersStats[row.teamLeader];
@@ -686,14 +689,8 @@ const App = () => {
   };
 
   const analyzeSetup = (rawData: SetupRow[]) => {
-      // Base data (Filtered by Date if NOT 'Todos', needed for Daily View)
-      // But we also need to respect Leader filter for global stats
       let data = rawData;
-      // We pass the FULL dataset to buildDailyView, but filtered by Leader? 
-      // If user filters Leader, Daily View should show only that leader's team.
-      // Date filter 'Todos' shows all dates. Specific date shows 1 col.
       
-      // Apply filters for calculations
       if (selectedDate !== 'Todos') { data = data.filter(r => r.periodo === selectedDate); }
       if (selectedLeader !== 'Todos') { data = data.filter(r => r.teamLeader === selectedLeader); }
 
@@ -719,7 +716,6 @@ const App = () => {
              globalCountExitDiff++;
           }
 
-          // Collaborator Stats Aggregation
           if (!collabStats[row.nome]) { 
               collabStats[row.nome] = { sumFirstBip: 0, countFirstBip: 0, sumExitDiff: 0, countExitDiff: 0, teamLeader: row.teamLeader, count: 0 }; 
           }
@@ -764,7 +760,7 @@ const App = () => {
           totalCollaborators: allCollabsSet.size
       };
 
-      // For Daily View: We need to use 'data' which is already filtered
+      // For Daily View (Matrix)
       let metricKey = 'tempoBipEntrada';
       let metricSecKey = 'tempoBipEntradaSec';
       if (dailyMetric === 'strong_finish') { metricKey = 'diffExitFormatted'; metricSecKey = 'diffExitSec'; } 
@@ -872,7 +868,7 @@ const App = () => {
   const reset = () => {
     setFileData(null); setFileName(''); setPerfResults(null); setSetupResults(null); setLunchResults(null);
     setSelectedLeader('Todos'); setSelectedCollaborator('Todos'); setSelectedDate('Todos');
-    setDailyMetric('default'); // Reset daily metric
+    setDailyMetric('default'); 
     setPerfViewMode('performance'); setSetupViewMode('fast_start'); setLunchViewMode('catraca'); setAppMode(null); 
   };
   const softReset = () => { setFileData(null); setFileName(''); setPerfResults(null); setSetupResults(null); setLunchResults(null); setSelectedLeader('Todos'); setSelectedCollaborator('Todos'); setSelectedDate('Todos'); setDailyMetric('default'); }
@@ -1054,6 +1050,7 @@ const App = () => {
             <div className="space-y-6 w-full">
                 {!perfResults ? (
                     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 max-w-4xl mx-auto">
+                        {/* ... (Performance Upload Content remains same) ... */}
                         <div className="flex items-center justify-between mb-8">
                             <h2 className="text-xl font-bold flex items-center gap-2"><CheckCircle className="text-green-500"/> Arquivo Carregado</h2>
                             <div className="flex gap-4">
@@ -1379,7 +1376,7 @@ const App = () => {
                         </table>
                     </div>
                 )}
-                {/* NEW DAILY VIEW (MATRIX) */}
+                {/* NEW DAILY VIEW (MATRIX) - SETUP */}
                 {setupViewMode === 'daily' && setupResults.dailyView && (
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-green-50 text-green-800 text-sm border-b border-green-100 flex items-center justify-between">
@@ -1415,11 +1412,31 @@ const App = () => {
                                         <tr key={i} className="hover:bg-slate-50">
                                             <td className="px-4 py-3 font-medium text-slate-800 sticky left-0 bg-white z-10 shadow-sm border-r border-slate-100">{row.nome}</td>
                                             <td className="px-4 py-3 text-slate-500">{row.teamLeader}</td>
-                                            {setupResults.dailyColumns?.map(day => (
-                                                <td key={day} className="px-4 py-3 text-center font-mono text-xs text-slate-600">
-                                                    {row.days[day] || '-'}
-                                                </td>
-                                            ))}
+                                            {setupResults.dailyColumns?.map(day => {
+                                                const cell = row.days[day];
+                                                // SETUP THRESHOLDS
+                                                // Fast Start (default): > 900s (15min) is Red
+                                                // Strong Finish: > 300s (5min) is Red
+                                                let isBad = false;
+                                                const val = cell?.seconds || 0;
+                                                
+                                                if (dailyMetric === 'strong_finish') {
+                                                    isBad = val > 300;
+                                                } else { // default = fast start
+                                                    isBad = val > 900;
+                                                }
+
+                                                let bgColor = 'text-slate-600';
+                                                if (cell) {
+                                                    bgColor = isBad ? 'bg-red-100 text-red-800 font-bold' : 'bg-green-100 text-green-800 font-bold';
+                                                }
+
+                                                return (
+                                                    <td key={day} className={`px-4 py-3 text-center font-mono text-xs ${bgColor}`}>
+                                                        {cell?.formatted || '-'}
+                                                    </td>
+                                                );
+                                            })}
                                             <td className="px-4 py-3 text-center font-bold text-green-700 bg-green-50 font-mono">{row.average}</td>
                                         </tr>
                                     ))}
@@ -1633,7 +1650,7 @@ const App = () => {
                     </div>
                 )}
                 
-                {/* NEW DAILY VIEW (MATRIX) LUNCH */}
+                {/* NEW DAILY VIEW (MATRIX) LUNCH - ATUALIZADO COM CORES */}
                 {lunchViewMode === 'daily' && lunchResults.dailyView && (
                     <div className="bg-white rounded-b-xl shadow-sm border border-t-0 border-slate-200 overflow-hidden w-full">
                         <div className="p-4 bg-green-50 text-green-800 text-sm border-b border-green-100 flex items-center justify-between">
@@ -1669,11 +1686,31 @@ const App = () => {
                                         <tr key={i} className="hover:bg-slate-50">
                                             <td className="px-4 py-3 font-medium text-slate-800 sticky left-0 bg-white z-10 shadow-sm border-r border-slate-100">{row.nome}</td>
                                             <td className="px-4 py-3 text-slate-500">{row.teamLeader}</td>
-                                            {lunchResults.dailyColumns?.map(day => (
-                                                <td key={day} className="px-4 py-3 text-center font-mono text-xs text-slate-600">
-                                                    {row.days[day] || '-'}
-                                                </td>
-                                            ))}
+                                            {lunchResults.dailyColumns?.map(day => {
+                                                const cell = row.days[day];
+                                                // LUNCH THRESHOLDS
+                                                // Catraca (default): > 3659s (01:00:59) is Red
+                                                // Retorno (Gap+Catraca): > 4500s (01:15:00) is Red
+                                                let isBad = false;
+                                                const val = cell?.seconds || 0;
+
+                                                if (dailyMetric === 'retorno') {
+                                                    isBad = val > 4500;
+                                                } else { // default = catraca
+                                                    isBad = val > 3659;
+                                                }
+                                                
+                                                let bgColor = 'text-slate-600';
+                                                if (cell) {
+                                                    bgColor = isBad ? 'bg-red-100 text-red-800 font-bold' : 'bg-green-100 text-green-800 font-bold';
+                                                }
+
+                                                return (
+                                                    <td key={day} className={`px-4 py-3 text-center font-mono text-xs ${bgColor}`}>
+                                                        {cell?.formatted || '-'}
+                                                    </td>
+                                                );
+                                            })}
                                             <td className="px-4 py-3 text-center font-bold text-green-700 bg-green-50 font-mono">{row.average}</td>
                                         </tr>
                                     ))}
